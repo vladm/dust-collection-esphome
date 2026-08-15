@@ -1,0 +1,515 @@
+# =====================================================================
+# esp32-dust-hub.yaml  —  Dust collection hub (ESP-NOW provider)
+# Board: ESP32-C6 dev board (native ADC, no external ADC needed)
+#
+# PIN BUDGET (ESP32-C6; ADC1 lives on GPIO0..GPIO6):
+#   GPIO0..GPIO3 ..... ACS712 line 1..4 (via 10k/10k dividers)
+#   GPIO10 ........... dust collector relay
+#   GPIO11 ........... latching manual switch (to GND)
+#   GPIO18 ........... "collector on" indicator LED
+#   (GPIO4/GPIO5 are also ADC-capable but double as strapping/JTAG
+#    pins — left free. GPIO8/GPIO9 are boot strapping pins — avoid.)
+#
+# The C6 is 2.4 GHz-only, so the hub cannot wander to 5 GHz — the
+# dual-band pinning requirement now applies only to the two XIAO
+# ESP32-C5 valve nodes. Mesh channel pinning still recommended.
+#
+# Role:
+#   * Senses current on 4 machine supply wires via ACS712-30A
+#   * Broadcasts per-line states + heartbeat to 4 blast-gate valve
+#     nodes over encrypted ESP-NOW with replay protection
+#   * Starts/stops the dust collector via relay:
+#       - 3 s start delay (blast gate opens first)
+#       - 10 s run-on after the last machine stops
+#       - 30 s minimum-off lockout (queued starts fire when it
+#         expires if demand persists); reboot implies a 30 s lockout
+#       - relay + LED ALWAYS start OFF after reboot
+#   * Latching manual switch = manual collection mode
+#   * LED on while the collector relay is energized
+#
+# ACS712-30A input chain (per line):
+#   ACS712 VCC->5V, GND->common GND with the ESP32
+#   OUT -> R1 10k -> node A -> R2 10k -> GND
+#   node A -> ESP32 ADC pin, 100nF from node A to GND
+#   Divider halves 66 mV/A -> 33 mV/A; idle midpoint ~1.25 V.
+# =====================================================================
+
+substitutions:
+  device_name: esp32-dust-hub
+  friendly_name: "Dust Collection Hub"
+
+  # --- ESP-NOW link timing ---
+  reconcile_interval: 5s      # full-state broadcast (reconciliation)
+  heartbeat_interval: 2s      # heartbeat publish
+
+  # --- Current sensing ---
+  sample_duration: 200ms      # RMS window (>= a few AC cycles)
+  sense_interval: 1s          # how often each line is measured
+  on_threshold: "1.5"         # RMS amps: machine ON above this
+  off_threshold: "0.8"        # ...OFF below this (hysteresis)
+  current_off_delay: 3s       # ride through brief dips
+
+  # --- Dust collector relay ---
+  collector_start_delay: 3s   # gate travel time before spin-up
+  collector_runon: 10s        # run-on after last machine stops
+  collector_min_off_ms: "30000"  # minimum time OFF before next ON
+
+  # --- Pins (ESP32-C6) ---
+  adc_line1_pin: GPIO0
+  adc_line2_pin: GPIO1
+  adc_line3_pin: GPIO2
+  adc_line4_pin: GPIO3
+  collector_relay_pin: GPIO10
+  manual_switch_pin: GPIO11   # latching switch to GND
+  collector_led_pin: GPIO18   # GPIO -> resistor -> LED -> GND
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32-c6-devkitc-1   # adjust to your exact C6 board
+  framework:
+    type: esp-idf
+
+logger:
+  level: INFO
+  # Per-update sensor value lines ("'Line 1 Current': Sending state ...",
+  # 4 lines/sec from the ct_clamp chain) are DEBUG-level spam. Filter the
+  # sensor tag so raising the global level to DEBUG for troubleshooting
+  # does not flood the log; machine ON/OFF transitions (binary_sensor)
+  # and all collector decisions still log normally.
+  logs:
+    sensor: INFO
+
+debug:
+  update_interval: 10min
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  domain: !secret wifi_domain
+  reboot_timeout: 5min
+  power_save_mode: none
+  fast_connect: true
+  ap:
+    ssid: ${device_name} Fallback     # 32-char SSID limit: keep it short
+    password: !secret wifi_fallback_password
+  # Mesh network notes:
+  #  * Pin the 2.4 GHz channel in the mesh controller if possible.
+  #  * Optionally pin this node to the nearest AP's 2.4 GHz radio:
+  # bssid: "XX:XX:XX:XX:XX:XX"
+
+captive_portal:
+
+# ---------------------------------------------------------------------
+# ESP-NOW bus — broadcast mode, one encrypted packet reaches all
+# 4 valve nodes.
+# ---------------------------------------------------------------------
+espnow:
+  id: espnow_bus
+
+packet_transport:
+  - platform: espnow
+    id: valve_link
+    espnow_id: espnow_bus
+    # peer_address omitted -> broadcast FF:FF:FF:FF:FF:FF
+    encryption: !secret espnow_psk
+    rolling_code_enable: true              # replay protection
+    update_interval: ${reconcile_interval} # periodic reconciliation
+    binary_sensors:
+      - line1_current
+      - line2_current
+      - line3_current
+      - line4_current
+    sensors:
+      - id: hub_heartbeat
+        broadcast_id: heartbeat
+
+# ---------------------------------------------------------------------
+# Lockout bookkeeping. initial_value 0 -> fresh boot behaves as if the
+# relay switched off at t=0 (30 s post-boot lockout). Unsigned millis()
+# arithmetic handles the ~49-day wraparound.
+# ---------------------------------------------------------------------
+globals:
+  - id: last_relay_off_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+
+# ---------------------------------------------------------------------
+# Sensors
+# ---------------------------------------------------------------------
+sensor:
+  # Heartbeat — publishes every 2s; each publish transmits immediately,
+  # so valves see a packet at least every 2s even with no state changes.
+  - platform: uptime
+    id: hub_heartbeat
+    internal: true
+    update_interval: ${heartbeat_interval}
+
+  # ACS712-30A chain, one per line:
+  #   adc (raw pin) -> ct_clamp (AC RMS, cancels the 1.25 V offset)
+  #   -> calibrate_linear (volts -> amps) -> analog_threshold (ON/OFF)
+  - platform: adc
+    pin: ${adc_line1_pin}
+    id: adc_line1
+    attenuation: 12db
+    internal: true
+
+  - platform: ct_clamp
+    sensor: adc_line1
+    id: line1_amps
+    internal: true            # detection path: full rate, not sent to API
+    sample_duration: ${sample_duration}
+    update_interval: ${sense_interval}
+    filters:
+      # ACS712-30A (66 mV/A) through 10k/10k divider: 33 mV per amp.
+      # No divider: use 0.066 -> 1.0
+      - calibrate_linear:
+          - 0.0 -> 0.0
+          - 0.033 -> 1.0
+
+  - platform: adc
+    pin: ${adc_line2_pin}
+    id: adc_line2
+    attenuation: 12db
+    internal: true
+
+  - platform: ct_clamp
+    sensor: adc_line2
+    id: line2_amps
+    internal: true            # detection path: full rate, not sent to API
+    sample_duration: ${sample_duration}
+    update_interval: ${sense_interval}
+    filters:
+      - calibrate_linear:
+          - 0.0 -> 0.0
+          - 0.033 -> 1.0
+
+  - platform: adc
+    pin: ${adc_line3_pin}
+    id: adc_line3
+    attenuation: 12db
+    internal: true
+
+  - platform: ct_clamp
+    sensor: adc_line3
+    id: line3_amps
+    internal: true            # detection path: full rate, not sent to API
+    sample_duration: ${sample_duration}
+    update_interval: ${sense_interval}
+    filters:
+      - calibrate_linear:
+          - 0.0 -> 0.0
+          - 0.033 -> 1.0
+
+  - platform: adc
+    pin: ${adc_line4_pin}
+    id: adc_line4
+    attenuation: 12db
+    internal: true
+
+  - platform: ct_clamp
+    sensor: adc_line4
+    id: line4_amps
+    internal: true            # detection path: full rate, not sent to API
+    sample_duration: ${sample_duration}
+    update_interval: ${sense_interval}
+    filters:
+      - calibrate_linear:
+          - 0.0 -> 0.0
+          - 0.033 -> 1.0
+
+  # -------------------------------------------------------------------
+  # HA-facing amp readings, decoupled from detection. The internal
+  # ct_clamp sensors publish every 1 s for the threshold logic; these
+  # copies average and report every 30 s so the API/log viewer isn't
+  # flooded with [S] state lines (4/s -> 4 per 30 s).
+  # -------------------------------------------------------------------
+  - platform: copy
+    source_id: line1_amps
+    name: "Line 1 Current"
+    filters:
+      - throttle_average: 30s
+  - platform: copy
+    source_id: line2_amps
+    name: "Line 2 Current"
+    filters:
+      - throttle_average: 30s
+  - platform: copy
+    source_id: line3_amps
+    name: "Line 3 Current"
+    filters:
+      - throttle_average: 30s
+  - platform: copy
+    source_id: line4_amps
+    name: "Line 4 Current"
+    filters:
+      - throttle_average: 30s
+
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    update_interval: 60s
+
+# ---------------------------------------------------------------------
+# Machine ON/OFF detection with hysteresis. A state change here is
+# transmitted to the valves immediately by packet_transport.
+# ---------------------------------------------------------------------
+binary_sensor:
+  - platform: analog_threshold
+    sensor_id: line1_amps
+    id: line1_current
+    name: "Machine 1 Running"
+    device_class: power
+    threshold:
+      upper: ${on_threshold}
+      lower: ${off_threshold}
+    filters:
+      - delayed_off: ${current_off_delay}
+
+  - platform: analog_threshold
+    sensor_id: line2_amps
+    id: line2_current
+    name: "Machine 2 Running"
+    device_class: power
+    threshold:
+      upper: ${on_threshold}
+      lower: ${off_threshold}
+    filters:
+      - delayed_off: ${current_off_delay}
+
+  - platform: analog_threshold
+    sensor_id: line3_amps
+    id: line3_current
+    name: "Machine 3 Running"
+    device_class: power
+    threshold:
+      upper: ${on_threshold}
+      lower: ${off_threshold}
+    filters:
+      - delayed_off: ${current_off_delay}
+
+  - platform: analog_threshold
+    sensor_id: line4_amps
+    id: line4_current
+    name: "Machine 4 Running"
+    device_class: power
+    threshold:
+      upper: ${on_threshold}
+      lower: ${off_threshold}
+    filters:
+      - delayed_off: ${current_off_delay}
+
+  # Machine-driven demand:
+  #   delayed_on  = blast gate head start before the collector spins up
+  #   delayed_off = run-on to clear the ducts after the last machine
+  - platform: template
+    id: any_machine_on
+    internal: true
+    lambda: |-
+      return id(line1_current).state || id(line2_current).state ||
+             id(line3_current).state || id(line4_current).state;
+    filters:
+      - delayed_on: ${collector_start_delay}
+      - delayed_off: ${collector_runon}
+    on_press:
+      - logger.log: "Machine active -> requesting collector start"
+      - script.execute: collector_start_req
+    on_release:
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_off: manual_collection
+              - switch.is_off: remote_collection
+          then:
+            - logger.log: "All machines idle, run-on elapsed -> stopping collector"
+            - script.execute: collector_stop
+          else:
+            - logger.log: "Machines idle, but manual/remote demand active -> collector stays on"
+
+  # Manual switch (LATCHING, to GND) — its physical position IS the
+  # manual collection mode:
+  #   latched ON  -> collector runs (user opens a blast gate by hand);
+  #                  30 s lockout still enforced, no gate-open delay
+  #   latched OFF -> collector stops unless a machine demands it
+  # If left ON across a reboot, the initial state fires on_press and
+  # the collector restarts after the 30 s post-boot lockout.
+  - platform: gpio
+    id: manual_collection
+    name: "Manual Collection"
+    icon: mdi:hand-back-right
+    pin:
+      number: ${manual_switch_pin}
+      mode: INPUT_PULLUP
+      inverted: true
+    # Publish the physical position at boot so a switch left latched ON
+    # is honored after a reboot (fires on_press -> start after lockout).
+    trigger_on_initial_state: true
+    filters:
+      - delayed_on: 30ms      # contact debounce
+      - delayed_off: 30ms
+    on_press:
+      - logger.log: "Manual collection ON -> requesting collector start"
+      - script.execute: collector_start_req
+    on_release:
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_off: any_machine_on
+              - switch.is_off: remote_collection
+          then:
+            - logger.log: "Manual collection OFF, no other demand -> stopping collector"
+            - script.execute: collector_stop
+          else:
+            - logger.log: "Manual OFF, but machine/remote demand active -> collector stays on"
+
+  # Diagnostics: relay state visible in HA (relay switch is internal).
+  - platform: template
+    name: "Dust Collector Running"
+    device_class: running
+    lambda: 'return id(collector_relay).state;'
+
+# ---------------------------------------------------------------------
+# "Collector on" indicator LED — driven strictly by relay state, so it
+# is correct on every path (auto, manual, lockout) and starts OFF
+# after reboot along with the relay.
+# ---------------------------------------------------------------------
+output:
+  - platform: gpio
+    id: collector_led
+    pin: ${collector_led_pin}
+
+# ---------------------------------------------------------------------
+# Switches
+# ---------------------------------------------------------------------
+switch:
+  # Remote collection — HA-controllable demand source, equivalent to
+  # the physical manual switch. This is a REQUEST, not the relay:
+  # turning it ON during the 30 s lockout queues the start (the switch
+  # shows ON immediately; "Dust Collector Running" reflects the actual
+  # relay). Turning it OFF stops the collector unless a machine or the
+  # physical manual switch still demands it. Never restored after
+  # reboot (ALWAYS_OFF), same as every other start path.
+  - platform: template
+    id: remote_collection
+    name: "Remote Collection"
+    icon: mdi:fan-plus
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+    on_turn_on:
+      - logger.log: "Remote collection ON -> requesting collector start"
+      - script.execute: collector_start_req
+    on_turn_off:
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_off: any_machine_on
+              - binary_sensor.is_off: manual_collection
+          then:
+            - logger.log: "Remote collection OFF, no other demand -> stopping collector"
+            - script.execute: collector_stop
+          else:
+            - logger.log: "Remote OFF, but machine/manual demand active -> collector stays on"
+
+  # Dust collector relay — internal: all on/off paths go through the
+  # lockout logic below. ALWAYS starts OFF after reboot.
+  - platform: gpio
+    id: collector_relay
+    internal: true
+    pin: ${collector_relay_pin}
+    restore_mode: ALWAYS_OFF
+    on_turn_on:
+      - output.turn_on: collector_led
+    on_turn_off:
+      - output.turn_off: collector_led
+      - lambda: 'id(last_relay_off_ms) = millis();'   # arm 30 s lockout
+
+# ---------------------------------------------------------------------
+# Collector start/stop with 30 s minimum-off lockout.
+# ---------------------------------------------------------------------
+script:
+  - id: collector_start_req
+    mode: restart
+    then:
+      - if:
+          condition:
+            switch.is_off: collector_relay
+          then:
+            - if:
+                condition:
+                  lambda: 'return (millis() - id(last_relay_off_ms)) < ${collector_min_off_ms};'
+                then:
+                  - logger.log:
+                      level: WARN
+                      format: "Collector start deferred: 30 s minimum-off lockout active"
+            # Wait out whatever remains of the lockout (passes instantly
+            # if none), then start only if demand still exists.
+            - wait_until:
+                condition:
+                  lambda: 'return (millis() - id(last_relay_off_ms)) >= ${collector_min_off_ms};'
+            - if:
+                condition:
+                  or:
+                    - binary_sensor.is_on: any_machine_on
+                    - binary_sensor.is_on: manual_collection
+                    - switch.is_on: remote_collection
+                then:
+                  - logger.log: "Starting dust collector"
+                  - switch.turn_on: collector_relay
+                else:
+                  - logger.log: "Lockout expired but demand gone - collector stays off"
+
+  - id: collector_stop
+    mode: single
+    then:
+      - script.stop: collector_start_req    # cancel any queued start
+      - switch.turn_off: collector_relay
+
+# ---------------------------------------------------------------------
+# Relay reconciliation — level-driven safety net (every 5 s):
+# ensures the relay converges to demand even if a one-shot boot-time
+# edge was missed. Start requests still pass through the 30 s lockout.
+# ---------------------------------------------------------------------
+interval:
+  - interval: 5s
+    then:
+      - if:
+          condition:
+            and:
+              - or:
+                  - binary_sensor.is_on: any_machine_on
+                  - binary_sensor.is_on: manual_collection
+                  - switch.is_on: remote_collection
+              - switch.is_off: collector_relay
+          then:
+            - script.execute: collector_start_req
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_off: any_machine_on
+              - binary_sensor.is_off: manual_collection
+              - switch.is_off: remote_collection
+              - switch.is_on: collector_relay
+          then:
+            - logger.log: "Reconcile: no demand but collector running - stopping"
+            - script.execute: collector_stop
+
+text_sensor:
+  - platform: debug
+    device:
+      name: "Device Info"
+    reset_reason:
+      name: "Reset Reason"
+
+button:
+  - platform: restart
+    name: "Restart"

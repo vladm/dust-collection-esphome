@@ -1,0 +1,472 @@
+# =====================================================================
+# dust-gate-common.yaml  —  Shared blast gate configuration (package)
+#
+# Include from a per-device file:
+#   packages:
+#     dust_gate: !include dust-gate-common.yaml
+#
+# Substitutions below are DEFAULTS. The per-device file overrides only
+# what differs (device name, line channel, board, pins, servo trim) —
+# main-file substitutions take precedence over package substitutions.
+#
+# Behavior:
+#   * Machine on its line starts -> gate opens immediately
+#   * Machine stops -> gate closes (hub debounces with 3 s delayed_off)
+#   * Reconciliation every 5 s: hub state is authoritative
+#   * Hub silent for 15 s -> fail-safe close (collector relay is on the
+#     hub, so in that scenario the collector is off too)
+#   * Encrypted ESP-NOW with rolling-code replay protection
+# =====================================================================
+
+substitutions:
+  # ---- Overridden per device (defaults here are placeholders) ----
+  device_name: esp32-dust-gateX
+  line_channel: lineX_current
+  # Board + pins: XIAO ESP32-C5 defaults; C6 gates override all four.
+  board: seeed_xiao_esp32c5
+  servo_pin: GPIO10
+  led_opened_pin: GPIO9
+  led_closed_pin: GPIO8
+  # ---- Shared across all gates ----
+  hub_name: esp32-dust-hub          # must match esphome: name on the hub
+  failsafe_timeout_ms: "15000"      # 15-second fail-safe window
+  # Position change per 20 ms loop tick (full range is -1.0..+1.0).
+  # 0.02 = slow 2 s sweep; 0.05 = ~0.8 s, servo runs at its natural speed.
+  sweep_step: "0.045"
+  # Physical rotation direction: "1.0" normal, "-1.0" reversed.
+  # MG996R rotates opposite to the Futaba S3004 for the same pulse change.
+  servo_direction: "1.0"
+  # Endpoint calibration. Trim with the Test Min/Max Endpoint buttons:
+  # raise level_min until the valve just seats closed without buzzing,
+  # lower level_max until Test Max lands exactly on seated-open.
+  # (5% = 1000 us, 7.5% = 1500 us, 10% = 2000 us, 12% = 2400 us at 50 Hz)
+  level_min: "4.1%"
+  level_max: "9.15%"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${device_name}
+  on_boot:
+    priority: -100
+    then:
+     - script.execute: boot_close
+
+esp32:
+  board: ${board}
+
+# ---------------------------------------------------------------------
+# ESP-NOW bus — register the hub as a peer so its packets are accepted.
+# ---------------------------------------------------------------------
+espnow:
+  id: espnow_bus
+  peers:
+    - !secret dust_hub_mac          # hub's ESP32 MAC (see hub boot log)
+
+packet_transport:
+  - platform: espnow
+    id: hub_link
+    espnow_id: espnow_bus
+    providers:
+      - name: ${hub_name}
+        # NOTE: on a consumer the key goes HERE (decrypts this
+        # provider's packets). Top-level `encryption:` is for outgoing
+        # broadcasts only and fails validation on a receive-only node
+        # ("No sensors or binary sensors to encrypt").
+        encryption: !secret espnow_psk
+    # Optional extra hardening (2-way challenge-response on top of the
+    # hub's rolling code). Rolling code alone already blocks replays:
+    # ping_pong_enable: true
+
+logger:
+    level: DEBUG
+    # For transport debugging, uncomment to see every received item
+    # ("Got sensor heartbeat ...", "Got binary sensor line3_current ..."):
+    # logs:
+    #   packet_transport: VERBOSE
+
+debug:
+  update_interval: 10min
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# Wi-Fi notes for the two XIAO ESP32-C5 nodes (dual-band!):
+#   * MUST be prevented from associating to 5 GHz, or ESP-NOW from the
+#     2.4 GHz-only hub will never be heard. Either join a
+#     2.4 GHz-only IoT SSID, or pin the nearest AP's 2.4 GHz radio
+#     with `bssid:` below.
+#   * enable_rrm / enable_btm invite mesh roaming between APs/bands —
+#     consider setting both to false on these stationary nodes.
+#   * reboot_timeout reboots the node after 5 min without Wi-Fi. Gates
+#     keep working over ESP-NOW during an AP outage, but will then
+#     reboot (and boot-close) every 5 min until Wi-Fi returns.
+wifi:
+  networks:
+    - ssid: !secret wifi_ssid
+      password: !secret wifi_password
+      # Optional, strongest pin: lock to ONE AP's 2.4 GHz radio.
+      # NOTE: bssid is only valid inside a networks: entry, never at
+      # the wifi: top level. Take the BSSID from the mesh UI's 2.4 GHz
+      # radio listing (each band has its own BSSID).
+      # bssid: !secret wifi_bssid
+  # NOTE: band_mode: 2.4GHZ is set in the C5 device files (gates 3+4)
+  # — the option only exists on ESP32-C5 silicon and fails the C6 build.
+  # It hard-restricts the dual-band radio so ESP-NOW can never be lost
+  # to a 5 GHz association; single-band C6 nodes don't need it.
+  domain: !secret wifi_domain
+  enable_rrm: false    # roaming assist invites AP/band hops - keep off
+  enable_btm: false
+  reboot_timeout: 5min
+  power_save_mode: none    # modem sleep causes missed ESP-NOW packets
+  fast_connect: true
+  ap:
+    ssid: ${device_name} Fallback    # 32-char SSID limit: keep it short
+    password: !secret wifi_fallback_password
+
+captive_portal:
+
+# ---------------------------------------------------------------------
+# Fail-safe watchdog state
+# ---------------------------------------------------------------------
+globals:
+  - id: last_hub_rx
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  - id: hub_alive
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  # Servo state machine
+  - id: servo_pos
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: is_moving
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: blink_phase
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+# ---------------------------------------------------------------------
+# Received hub heartbeat — every packet carrying it (heartbeat each 2 s,
+# full reconciliation broadcast each 5 s) re-arms the watchdog.
+# ---------------------------------------------------------------------
+sensor:
+  - platform: uptime
+    name: Uptime
+  - platform: wifi_signal
+    name: WiFi Signal
+    update_interval: 60s
+  - platform: packet_transport
+    transport_id: hub_link
+    provider: ${hub_name}
+    remote_id: heartbeat
+    id: hub_heartbeat_rx
+    internal: true
+    accuracy_decimals: 0
+    on_value:
+      - lambda: |-
+          id(last_hub_rx) = millis();
+          if (!id(hub_alive)) {
+            ESP_LOGI("failsafe", "Hub link established/restored");
+            id(hub_alive) = true;
+          }
+
+text_sensor:
+  - platform: debug
+    device:
+      name: "Device Info"
+    reset_reason:
+      name: "Reset Reason"
+
+# ---------------------------------------------------------------------
+# Received machine state for THIS node's line.
+# Changes arrive immediately (hub transmits on change).
+# ---------------------------------------------------------------------
+binary_sensor:
+  - platform: packet_transport
+    transport_id: hub_link
+    provider: ${hub_name}
+    remote_id: ${line_channel}
+    id: line_current
+    name: "Machine Running (remote)"
+    internal: false     # required alongside name: on this platform
+    device_class: power
+    on_press:
+      - logger.log: "Machine on -> opening blast gate"
+      - script.execute: open_valve
+    on_release:
+      - logger.log: "Machine off -> closing blast gate"
+      - script.execute: close_valve
+
+  # Diagnostic: heartbeat watchdog state. ON = heartbeat flowing and
+  # fail-safe armed; OFF while "Machine Running (remote)" has a state
+  # means the analog heartbeat is not arriving (reconciliation disabled).
+  - platform: template
+    name: "Hub Link OK"
+    device_class: connectivity
+    entity_category: diagnostic
+    lambda: 'return id(hub_alive);'
+
+  # Optional: hub link health via transport ping-pong (requires
+  # ping_pong_enable above).
+  # - platform: packet_transport
+  #   transport_id: hub_link
+  #   provider: ${hub_name}
+  #   type: status
+  #   name: "Hub Link Status"
+
+# ------------------------------------------------------------------
+# Outputs
+# ------------------------------------------------------------------
+output:
+  # Servo PWM
+  - platform: ledc
+    id: servo_output
+    pin: ${servo_pin}
+    channel: 0
+    frequency: 50 Hz
+  # LEDs
+  - platform: gpio
+    id: led_opened
+    pin: ${led_opened_pin}
+  - platform: gpio
+    id: led_closed
+    pin: ${led_closed_pin}
+
+servo:
+  - id: valve_servo
+    output: servo_output
+    # Endpoints come from the substitutions at the top of the file.
+    # Note: this MG996R clone ignores pulses below ~1000 us, so keep
+    # level_min at or above 5%.  (Current calibration 4.1% was found
+    # empirically on this rig — trust the rig over the note.)
+    min_level: ${level_min}
+    idle_level: 7.0%
+    max_level: ${level_max}
+
+# ---------------------------------------------------------------------
+# Scripts
+# ---------------------------------------------------------------------
+script:
+  # Fail-safe close on heartbeat loss
+  - id: failsafe_close
+    mode: single
+    then:
+      - logger.log:
+          level: WARN
+          format: "FAIL-SAFE: hub heartbeat lost >15s - closing blast gate"
+      - script.execute: close_valve
+
+  # Full sweep toward +90deg (open)
+  - id: open_valve
+    mode: restart
+    then:
+      - script.stop: close_valve
+      - script.stop: boot_close   # cancel boot reference if still pending:
+                                  # its 2 s delay would otherwise resume
+                                  # AFTER an early ESP-NOW open and clobber
+                                  # the position back to closed (boot race)
+      - globals.set: { id: is_moving, value: 'true' }
+      - while:
+          condition:
+            lambda: 'return id(servo_pos) < 1.0f;'
+          then:
+            - lambda: |-
+                id(servo_pos) += ${sweep_step}f;
+                if (id(servo_pos) > 1.0f) id(servo_pos) = 1.0f;
+            - servo.write:
+                id: valve_servo
+                level: !lambda 'return ${servo_direction}f * id(servo_pos);'
+            - delay: 20ms
+      - delay: 400ms
+      # NOTE: intentionally NO servo.detach here. Detaching at the open
+      # seat caused a few-degree fall-back (signal-loss twitch + loss of
+      # holding torque). The servo stays attached and actively holds open.
+      - globals.set: { id: is_moving, value: 'false' }
+      - script.execute: set_leds_idle
+
+  # Full sweep toward -90deg (close)
+  - id: close_valve
+    mode: restart
+    then:
+      - script.stop: open_valve
+      - script.stop: boot_close   # cancel boot reference if still pending
+      - globals.set: { id: is_moving, value: 'true' }
+      - while:
+          condition:
+            lambda: 'return id(servo_pos) > -1.0f;'
+          then:
+            - lambda: |-
+                id(servo_pos) -= ${sweep_step}f;
+                if (id(servo_pos) < -1.0f) id(servo_pos) = -1.0f;
+            - servo.write:
+                id: valve_servo
+                level: !lambda 'return ${servo_direction}f * id(servo_pos);'
+            - delay: 20ms
+      - delay: 400ms
+      - servo.detach: valve_servo    # seat holds closed; detach is safe here
+      - globals.set: { id: is_moving, value: 'false' }
+      - script.execute: set_leds_idle
+
+  # Boot reference: drive straight to the closed position.
+  # A direct write (no sweep) is used so the valve never moves toward
+  # open first, regardless of the unknown starting position.
+  - id: boot_close
+    then:
+      - globals.set: { id: is_moving, value: 'true' }
+      - servo.write:
+          id: valve_servo
+          level: !lambda 'return ${servo_direction}f * -1.0f;'  # closed position
+      - delay: 2s          # ample time for a full 180deg travel under load
+      - servo.detach: valve_servo
+      - globals.set: { id: servo_pos, value: '-1.0' }
+      - globals.set: { id: is_moving, value: 'false' }
+      - script.execute: set_leds_idle
+
+  # Set steady LED state from the tracked position
+  - id: set_leds_idle
+    then:
+      - lambda: |-
+          if (id(servo_pos) <= -0.99f) {
+            id(led_closed).turn_on();
+            id(led_opened).turn_off();
+          } else if (id(servo_pos) >= 0.99f) {
+            id(led_opened).turn_on();
+            id(led_closed).turn_off();
+          } else {
+            // stopped mid-travel: position indeterminate
+            id(led_opened).turn_off();
+            id(led_closed).turn_off();
+          }
+
+# ---------------------------------------------------------------------
+# 1 s watchdog tick (fail-safe) + 5 s reconciliation + LED blinker.
+# ---------------------------------------------------------------------
+interval:
+  # 15-second fail-safe: no packet from hub -> close gate.
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            lambda: |-
+              return id(hub_alive) &&
+                     (millis() - id(last_hub_rx) > ${failsafe_timeout_ms});
+          then:
+            - lambda: 'id(hub_alive) = false;'   # one-shot; re-arms on next rx
+            - script.execute: failsafe_close
+
+  # Reconciliation: hub state is authoritative while the link is up.
+  # Corrects drift from missed packets, manual HA moves, or reboots.
+  # Remove this block if manual HA override should persist.
+  - interval: 5s
+    then:
+      - if:
+          condition:
+            and:
+              - lambda: 'return id(hub_alive);'
+              - binary_sensor.is_on: line_current
+              - lambda: |-
+                  return id(ball_valve_cover).position != COVER_OPEN &&
+                         id(ball_valve_cover).current_operation == COVER_OPERATION_IDLE;
+          then:
+            - logger.log: "Reconcile: machine ON but gate not open - opening"
+            - script.execute: open_valve
+      - if:
+          condition:
+            and:
+              - lambda: 'return id(hub_alive);'
+              - binary_sensor.is_off: line_current
+              - lambda: |-
+                  return id(ball_valve_cover).position != COVER_CLOSED &&
+                         id(ball_valve_cover).current_operation == COVER_OPERATION_IDLE;
+          then:
+            - logger.log: "Reconcile: machine OFF but gate not closed - closing"
+            - script.execute: close_valve
+
+  # LED blinker: while moving, alternate the two LEDs at 4 Hz
+  - interval: 125ms
+    then:
+      - if:
+          condition:
+            lambda: 'return id(is_moving);'
+          then:
+            - lambda: |-
+                id(blink_phase) = !id(blink_phase);
+                if (id(blink_phase)) {
+                  id(led_opened).turn_on();
+                  id(led_closed).turn_off();
+                } else {
+                  id(led_opened).turn_off();
+                  id(led_closed).turn_on();
+                }
+
+# ------------------------------------------------------------------
+# Cover entity for Home Assistant (open / close / stop)
+# ------------------------------------------------------------------
+cover:
+  - platform: template
+    name: "Ball Valve"
+    id: ball_valve_cover
+    device_class: damper
+    lambda: |-
+      if (id(servo_pos) >= 0.99f && !id(is_moving)) return COVER_OPEN;
+      if (id(servo_pos) <= -0.99f && !id(is_moving)) return COVER_CLOSED;
+      return {};  // in transit: keep last reported state
+    open_action:
+      - script.execute: open_valve
+    close_action:
+      - script.execute: close_valve
+    stop_action:
+      - script.stop: open_valve
+      - script.stop: close_valve
+      - servo.detach: valve_servo
+      - globals.set: { id: is_moving, value: 'false' }
+      - script.execute: set_leds_idle
+    optimistic: false
+    assumed_state: false
+
+# ------------------------------------------------------------------
+# Standalone commands (redundant with the cover, kept for convenience)
+# ------------------------------------------------------------------
+button:
+#  - platform: template
+#    name: "Open Valve"
+#    icon: mdi:valve-open
+#    on_press:
+#      - script.execute: open_valve
+#  - platform: template
+#    name: "Close Valve"
+#    icon: mdi:valve-closed
+#    on_press:
+#      - script.execute: close_valve
+  # ---- Diagnostics: RAW endpoints, direction multiplier NOT applied ----
+  # Use these to empirically map pulse to valve position on this rig:
+  #   Test Min = level_min pulse, Test Max = level_max pulse.
+#  - platform: template
+#    name: "Test Min Endpoint"
+#    entity_category: diagnostic
+#    on_press:
+#      - script.stop: open_valve
+#      - script.stop: close_valve
+#      - globals.set: { id: is_moving, value: 'false' }
+#      - servo.write: { id: valve_servo, level: -100% }
+#  - platform: template
+#    name: "Test Max Endpoint"
+#    entity_category: diagnostic
+#    on_press:
+#      - script.stop: open_valve
+#      - script.stop: close_valve
+#      - globals.set: { id: is_moving, value: 'false' }
+#      - servo.write: { id: valve_servo, level: 100% }
+  - platform: restart
+    name: "Restart device"

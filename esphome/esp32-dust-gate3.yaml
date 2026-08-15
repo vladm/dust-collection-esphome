@@ -1,0 +1,23 @@
+# =====================================================================
+# esp32-dust-gate3.yaml — Blast gate 3 (Seeed XIAO ESP32-C5)
+# Only per-device values live here; everything else comes from the
+# shared package. Main-file substitutions override package defaults.
+# =====================================================================
+substitutions:
+  device_name: esp32-dust-gate3
+  line_channel: line3_current
+  # Board + pins: C5 defaults from the package already match this node.
+  # Servo trim — calibrated on THIS rig (see procedure in common file):
+  sweep_step: "0.045"
+  servo_direction: "1.0"
+  level_min: "4.1%"
+  level_max: "9.15%"
+
+packages:
+  dust_gate: !include dust-gate-common.yaml
+
+# C5-only: hard-restrict the dual-band radio to 2.4 GHz so this node
+# can never associate to 5 GHz and go deaf to the hub's ESP-NOW.
+# (Merges into the package's wifi config; option doesn't exist on C6.)
+wifi:
+  band_mode: 2.4GHZ
