@@ -5,16 +5,16 @@
 # PIN BUDGET (ESP32-C6; ADC1 lives on GPIO0..GPIO6):
 #   GPIO0..GPIO3 ..... ACS712 line 1..4 (via 10k/10k dividers)
 #   GPIO10 ........... dust collector relay
-#   GPIO11 ........... latching manual switch (to GND)
-#   GPIO18 ........... "collector on" indicator LED
-#   GPIO19 ........... latching external switch (to GND): collector
+#   GPIO11 ........... latching external switch (to GND): collector
 #                      + opens the gate selected by external_gate_num
+#   GPIO18 ........... "collector on" indicator LED
+#   GPIO19 ........... latching manual switch (to GND)
 #   (GPIO4/GPIO5 are also ADC-capable but double as strapping/JTAG
 #    pins — left free. GPIO8/GPIO9 are boot strapping pins — avoid.)
 #
 # The C6 is 2.4 GHz-only, so the hub cannot wander to 5 GHz — the
-# dual-band pinning requirement now applies only to the two XIAO
-# ESP32-C5 valve nodes. Mesh channel pinning still recommended.
+# dual-band pinning requirement applies to the three XIAO ESP32-C5
+# valve nodes (gates 1, 3, 4). Mesh channel pinning still recommended.
 #
 # Role:
 #   * Senses current on 4 machine supply wires via ACS712-30A
@@ -65,9 +65,9 @@ substitutions:
   adc_line3_pin: GPIO2
   adc_line4_pin: GPIO3
   collector_relay_pin: GPIO10
-  manual_switch_pin: GPIO11   # latching switch to GND
+  manual_switch_pin: GPIO19   # latching switch to GND
   collector_led_pin: GPIO18   # GPIO -> resistor -> LED -> GND
-  external_switch_pin: GPIO19 # latching switch to GND (collector + one gate)
+  external_switch_pin: GPIO11 # latching switch to GND (collector + one gate)
   external_gate_num: "4"      # which gate (1-4) the external switch opens
 
 esphome:
@@ -185,6 +185,8 @@ sensor:
     filters:
       # ACS712-30A (66 mV/A) through 10k/10k divider: 33 mV per amp.
       # No divider: use 0.066 -> 1.0
+      # ACS712-20A (100 mV/A, better sensitivity — see README):
+      # 0.050 -> 1.0 with the divider, 0.100 -> 1.0 without.
       - calibrate_linear:
           - 0.0 -> 0.0
           - 0.033 -> 1.0

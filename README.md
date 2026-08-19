@@ -17,8 +17,9 @@ collects. Validated against **ESPHome 2026.7.4**.
 - Opens only the blast gate for that machine; closes it when the machine stops.
 - Sequences the collector: gate opens first (3 s), collector runs on for 10 s after
   the last machine stops, and a 30 s minimum-off lockout protects the motor.
-- Manual paths: a latching hardware switch at the collector, plus a "Remote
-  Collection" switch for HA/voice.
+- Manual paths: a latching hardware switch at the collector, a second latching
+  "external" switch that also opens one configured gate (`external_gate_num`,
+  currently gate 4), plus a "Remote Collection" switch for HA/voice.
 - Fails safe: gates close if the hub goes quiet for 15 s, and every node closes its
   valve and starts the relay OFF on boot.
 
@@ -27,11 +28,12 @@ collects. Validated against **ESPHome 2026.7.4**.
 ```
                      ESP-NOW broadcast (XXTEA-encrypted, rolling code)
   esp32-dust-hub  ──────────────────────────────────────────────►  esp32-dust-gate1..4
-  (ESP32-C6 devkit)                                                (gates 1+2: ESP32-C6,
-   • 4x ACS712-30A current sensors (ADC GPIO0..3)                   gates 3+4: XIAO ESP32-C5)
+  (ESP32-C6 devkit)                                                (gate 2: ESP32-C6 devkit,
+   • 4x ACS712-30A current sensors (ADC GPIO0..3)                   gates 1/3/4: XIAO ESP32-C5)
    • dust collector relay (GPIO10)                                  • MG996R servo ball valve
-   • latching manual switch (GPIO11)                                • cover entity (damper)
+   • latching external switch (GPIO11): collector + one gate        • cover entity (damper)
    • collector-on LED (GPIO18)                                      • open/closed LEDs
+   • latching manual switch (GPIO19)
 ```
 
 - **Transport** — native ESPHome `espnow` + `packet_transport` in broadcast mode.
@@ -45,12 +47,21 @@ collects. Validated against **ESPHome 2026.7.4**.
 
 ### Hub control logic
 
-Per line: `adc` → `ct_clamp` (AC RMS, cancels the ACS712 DC offset) →
-`calibrate_linear` (volts → amps) → `analog_threshold` (1.5 A on / 0.8 A off, 3 s
-`delayed_off`).
+Per line: `adc` (8-sample average) → `ct_clamp` (AC RMS, cancels the ACS712 DC
+offset) → `calibrate_linear` (volts → amps) → `analog_threshold` (`lineN_detect`:
+1.5 A on / 0.8 A off, 3 s `delayed_off`). What the gates receive is a template
+wrapper `lineN_current` = detection OR the external switch on its configured gate,
+so the external switch opens its gate through the normal ESP-NOW path.
 
 Collector demand = **any machine running** OR **latching manual switch** OR
-**"Remote Collection"**. The relay itself is `internal:` — every path goes through
+**latching external switch** OR **"Remote Collection"**. Every path except Remote
+Collection gives the gate a 3 s travel head start before spin-up: the machine path
+via `delayed_on` on `any_machine_on`, the manual switch via `delayed_on` on its GPIO
+sensor, and the external switch via the internal `external_demand` template — its
+raw state opens the gate immediately, while all demand checks read the delayed view,
+so the 5 s reconciliation cannot bypass the head start.
+
+The relay itself is `internal:` — every path goes through
 the `collector_start_req` / `collector_stop` scripts, so the 30 s lockout can never
 be bypassed. A start requested during the lockout is *queued*: it waits out the
 remainder and then re-checks that demand still exists. Relay and LED use
@@ -79,29 +90,31 @@ caused a few-degree fall-back.
 |---|---|
 | `esphome/esp32-dust-hub.yaml` | Complete hub config (standalone) |
 | `esphome/dust-gate-common.yaml` | Shared gate package: all gate logic, C5 board/pin defaults |
-| `esphome/esp32-dust-gate1.yaml` | Gate 1 (C6): board + pin + servo-trim overrides |
+| `esphome/esp32-dust-gate1.yaml` | Gate 1 (XIAO C5): servo trim + `wifi: band_mode: 2.4GHZ` |
+| `esphome/esp32-dust-gate2.yaml` | Gate 2 (C6 devkit): board + pin + servo-trim overrides |
 | `esphome/esp32-dust-gate3.yaml` | Gate 3 (XIAO C5): servo trim + `wifi: band_mode: 2.4GHZ` |
+| `esphome/esp32-dust-gate4.yaml` | Gate 4 (XIAO C5): servo trim + `wifi: band_mode: 2.4GHZ` |
 | `esphome/secrets.yaml-sample.txt` | Template for `esphome/secrets.yaml` (git-ignored) |
+| `.github/workflows/validate.yml` | CI: `esphome config` over all device configs (Docker) |
 | `CLAUDE.md` | Working notes / design rationale |
 
 Per-device gate files contain only substitutions (device name, line channel, board,
 pins, servo trim) plus `packages: !include dust-gate-common.yaml`. Main-file
 substitutions override package defaults, and local config merges over package config
-— that is how gate 3 adds `band_mode` without touching the shared file.
-
-**Gates 2 and 4 do not exist yet**: copy `esp32-dust-gate1.yaml` → gate 2 (C6, no
-`band_mode`) and `esp32-dust-gate3.yaml` → gate 4 (C5, keep `band_mode`), changing
-`device_name`, `line_channel` and the servo trim.
+— that is how the C5 gates (1, 3, 4) add `band_mode` without touching the shared
+file.
 
 ## Hardware
 
 ### Bill of materials
 
 - 1× ESP32-C6 dev board (hub, `esp32-c6-devkitc-1`, ESP-IDF framework)
-- 2× ESP32-C6 dev board (gates 1–2), 2× Seeed XIAO ESP32-C5 (gates 3–4)
-- 4× ACS712-30A current sensor + 8× 10 kΩ resistors + 4× 100 nF capacitors
+- 1× ESP32-C6 dev board (gate 2), 3× Seeed XIAO ESP32-C5 (gates 1, 3, 4)
+- 4× ACS712 current sensor (**prefer the 20 A part** — see note below) + 8× 10 kΩ
+  resistors + 4× 100 nF capacitors
 - 4× MG996R servo driving a ball-valve blast gate
-- 1× relay module rated for the collector motor, 1× latching switch, LEDs + resistors
+- 1× relay module rated for the collector motor, 2× latching switches (manual +
+  external), LEDs + resistors
 - 5 V supply for the sensor rail and servos (**common ground with the ESP32s**)
 
 ### Hub pinout (ESP32-C6, ADC1 = GPIO0..GPIO6)
@@ -110,15 +123,16 @@ substitutions override package defaults, and local config merges over package co
 |---|---|
 | GPIO0..GPIO3 | ACS712 line 1..4, via 10k/10k dividers |
 | GPIO10 | Dust collector relay |
-| GPIO11 | Latching manual switch (to GND, `INPUT_PULLUP`, inverted) |
+| GPIO11 | Latching external switch (to GND, `INPUT_PULLUP`, inverted): collector + gate `external_gate_num` |
 | GPIO18 | "Collector on" indicator LED |
+| GPIO19 | Latching manual switch (to GND, `INPUT_PULLUP`, inverted) |
 
 GPIO4/GPIO5 are ADC-capable but double as strapping/JTAG pins; GPIO8/GPIO9 are boot
 strapping pins — all left free.
 
 ### Gate pinout
 
-| Pin | XIAO C5 (package default) | C6 (gate 1 override) |
+| Pin | XIAO C5 (package default) | C6 (gate 2 override) |
 |---|---|---|
 | Servo PWM (LEDC, 50 Hz) | GPIO10 | GPIO3 |
 | "Opened" LED | GPIO9 | GPIO10 |
@@ -136,6 +150,15 @@ The ACS712-30A puts out 66 mV/A around a 2.5 V idle midpoint at 5 V. The divider
 halves that to **33 mV/A with a ~1.25 V midpoint**, which keeps the signal inside the
 ESP32 ADC's linear range. `calibrate_linear: 0.033 -> 1.0` assumes the divider is
 present — without it, use `0.066 -> 1.0`.
+
+> **Prefer the ACS712-20A in most cases** — reserve the 30 A part for lines feeding
+> really high-powered machines. The whole family has roughly the same absolute noise
+> at the output, so sensitivity is what sets the noise floor *in amps*: the 20 A part's
+> 100 mV/A (50 mV/A after the divider) is ~1.5× the 30 A part's, which lowers the idle
+> noise floor accordingly and makes the gap between "shop idle" and the smallest
+> machine much easier to threshold. With a 20 A sensor, change `calibrate_linear` to
+> `0.050 -> 1.0` (divider) or `0.100 -> 1.0` (no divider). ±20 A of headroom covers
+> most single-phase workshop machines.
 
 > **Floating ADC pins read 1–2 phantom amps.** That is noise RMS and is expected on
 > the bench with no sensors attached; it disappears once the low-impedance ACS712
@@ -162,6 +185,10 @@ cp esphome/secrets.yaml-sample.txt esphome/secrets.yaml
 | `espnow_psk` | ESP-NOW XXTEA pre-shared key (same on all 5 nodes) |
 | `dust_hub_mac` | Hub MAC, registered as an ESP-NOW peer by the gates — **uppercase hex** |
 | `wifi_bssid` | Optional — pin gates to one AP's 2.4 GHz radio |
+
+The sample's dummy values are deliberately **format-valid** (password lengths,
+32-byte base64 `api_key`, uppercase MACs) because CI validates against them —
+keep the formats intact if you edit the sample.
 
 ### 2. Flash the hub first
 
@@ -195,8 +222,9 @@ endpoints, ignoring `servo_direction`), then:
 3. Set `servo_direction` to `-1.0` if the valve travels the wrong way.
 4. Re-comment the buttons.
 
-At 50 Hz: 5 % = 1000 µs, 7.5 % = 1500 µs, 10 % = 2000 µs. Gate 3 is calibrated at
-`level_min 4.1%` / `level_max 9.15%`; gate 1's template ships `5%` / `9.5%`.
+At 50 Hz: 5 % = 1000 µs, 7.5 % = 1500 µs, 10 % = 2000 µs. Current per-rig trims:
+gate 1 `5%` / `10.6%` (step `0.047`), gate 2 `5.4%` / `10.3%`, gate 3 `5.1%` /
+`10.0%`. Gate 4 ships gate 1's values and **still needs calibration on its own rig**.
 
 ### 5. Calibrate the current thresholds
 
@@ -204,6 +232,15 @@ Watch the throttled "Line N Current" sensors with the shop idle, then with the
 smallest machine running, and set `on_threshold` / `off_threshold` between the two.
 The 30 A parts have the highest noise floor in the family, so the idle reading will
 not be zero.
+
+## CI validation
+
+Every push or PR touching `esphome/**` runs `esphome config` on all five device
+configs (`.github/workflows/validate.yml`) inside the ESPHome Docker image pinned to
+the release the fleet runs — full schema validation without the slow ESP-IDF
+compile. `dust-gate-common.yaml` is covered through each gate that includes it, and
+the git-ignored `secrets.yaml` is stood in for by the sample file. When upgrading
+ESPHome, bump the image tag in the workflow together with the fleet.
 
 ## Tuning
 
@@ -235,7 +272,8 @@ Confirm that `collector_start_delay` is at least the real gate travel time.
 
 ## Home Assistant entities
 
-**Hub** — Machine 1..4 Running · Manual Collection · Dust Collector Running ·
+**Hub** — Machine 1..4 Running · Manual Collection · External Collection ·
+Dust Collector Running ·
 Remote Collection (switch) · Line 1..4 Current (30 s averages) · WiFi Signal ·
 Device Info · Reset Reason · Restart
 
@@ -249,9 +287,9 @@ reflects the actual relay.
 
 ## Wi-Fi, mesh and dual-band — the main operational hazard
 
-ESP-NOW requires all five radios on the **same 2.4 GHz channel**. The hub and gates
-1–2 are C6 (2.4 GHz-only), but **gates 3–4 are dual-band XIAO C5** and have gone deaf
-by associating to 5 GHz. The symptom is total silence: "Machine Running (remote)"
+ESP-NOW requires all five radios on the **same 2.4 GHz channel**. The hub and gate 2
+are C6 (2.4 GHz-only), but **gates 1, 3 and 4 are dual-band XIAO C5** and a C5 node
+has gone deaf by associating to 5 GHz. The symptom is total silence: "Machine Running (remote)"
 unknown, "Hub Link OK" disconnected, and hub reboots do not help.
 
 Mitigations already in the configs:
@@ -305,8 +343,8 @@ boot-close) every 5 minutes even though ESP-NOW itself would have kept working.
 ## Deployment checklist
 
 - [ ] Wire the ACS712s and dividers; calibrate per-line thresholds against real draw.
-- [ ] Create `esp32-dust-gate2.yaml` and `esp32-dust-gate4.yaml`.
-- [ ] Verify the gate 1 / gate 2 C6 pin overrides against the actual wiring.
+- [ ] Verify the gate 2 C6 pin overrides against the actual wiring.
+- [ ] Calibrate gate 4's servo trim (currently a copy of gate 1's values).
 - [ ] Set `wifi_bssid` and uncomment the bssid pin if the mesh mis-channels.
 - [ ] Pin the mesh 2.4 GHz channel; delete stale HA entities left by renames.
 - [ ] Confirm `collector_start_delay` ≥ real gate travel time.

@@ -1,18 +1,13 @@
 # =====================================================================
-# esp32-dust-gate1.yaml — Blast gate 1 (ESP32-C6 board)
-# TEMPLATE: adjust board id, pins, and servo trim to this node's
-# hardware before flashing (values below are from the old esp32c6-*
-# configs — verify against the actual wiring).
+# esp32-dust-gate1.yaml — Blast gate 1 (Seeed XIAO ESP32-C5)
+# Only per-device values live here; everything else comes from the
+# shared package. Main-file substitutions override package defaults.
 # =====================================================================
 substitutions:
   device_name: esp32-dust-gate1
   line_channel: line1_current
-#  # C6 board + pin overrides (package defaults are for the XIAO C5):
-#  board: esp32-c6-devkitc-1
-#  servo_pin: GPIO3
-#  led_opened_pin: GPIO10
-#  led_closed_pin: GPIO1
-  # Servo trim — calibrate per rig:
+  # Board + pins: C5 defaults from the package already match this node.
+  # Servo trim — calibrated on THIS rig (see procedure in common file):
   sweep_step: "0.047"
   servo_direction: "1.0"
   level_min: "5%"
@@ -21,5 +16,8 @@ substitutions:
 packages:
   dust_gate: !include dust-gate-common.yaml
 
+# C5-only: hard-restrict the dual-band radio to 2.4 GHz so this node
+# can never associate to 5 GHz and go deaf to the hub's ESP-NOW.
+# (Merges into the package's wifi config; option doesn't exist on C6.)
 wifi:
   band_mode: 2.4GHZ

@@ -1,18 +1,17 @@
 # =====================================================================
-# esp32-dust-gate3.yaml — Blast gate 3 (Seeed XIAO ESP32-C5)
+# esp32-dust-gate2.yaml — Blast gate 2 (ESP32-C6 devkit)
 # Only per-device values live here; everything else comes from the
 # shared package. Main-file substitutions override package defaults.
 # =====================================================================
 substitutions:
   device_name: esp32-dust-gate2
   line_channel: line2_current
-  # Board + pins: C5 defaults from the package already match this node.
-  # Servo trim — calibrated on THIS rig (see procedure in common file):
   # C6 board + pin overrides (package defaults are for the XIAO C5):
   board: esp32-c6-devkitc-1
   servo_pin: GPIO3
   led_opened_pin: GPIO10
   led_closed_pin: GPIO1
+  # Servo trim — calibrated on THIS rig (see procedure in common file):
   sweep_step: "0.045"
   servo_direction: "1.0"
   level_min: "5.4%"

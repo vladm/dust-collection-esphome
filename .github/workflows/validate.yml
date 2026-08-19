@@ -1,0 +1,41 @@
+# Validates every device config with `esphome config` (full schema
+# validation, no compile) inside the ESPHome Docker image pinned to the
+# release the fleet runs. Bump the image tag when upgrading ESPHome.
+name: Validate ESPHome configs
+
+on:
+  push:
+    paths:
+      - "esphome/**"
+      - ".github/workflows/validate.yml"
+  pull_request:
+    paths:
+      - "esphome/**"
+      - ".github/workflows/validate.yml"
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: esphome config
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/esphome/esphome:2026.7.4
+    steps:
+      - uses: actions/checkout@v4
+
+      # secrets.yaml is git-ignored; the sample ships format-valid dummy
+      # values (password lengths, 32-byte base64 api_key, uppercase MACs)
+      # precisely so CI can validate with it.
+      - name: Provide dummy secrets
+        run: cp esphome/secrets.yaml-sample.txt esphome/secrets.yaml
+
+      # esp32-dust-*.yaml = hub + all gates; dust-gate-common.yaml is a
+      # package and gets validated through each gate that includes it.
+      - name: Validate device configs
+        run: |
+          set -e
+          for cfg in esphome/esp32-dust-*.yaml; do
+            echo "::group::${cfg}"
+            esphome config "${cfg}"
+            echo "::endgroup::"
+          done
