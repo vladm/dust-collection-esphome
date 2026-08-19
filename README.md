@@ -108,16 +108,34 @@ file.
 
 ### Bill of materials
 
-- 1× ESP32-C6 dev board (hub, `esp32-c6-devkitc-1`, ESP-IDF framework)
-- 1× ESP32-C6 dev board (gate 2), 3× Seeed XIAO ESP32-C5 (gates 1, 3, 4)
-- 4× ACS712 current sensor (**prefer the 20 A part** — see note below) + 8× 10 kΩ
-  resistors + 4× 100 nF capacitors
+- 5× ESP32 dev board — **any ESP32 variant works** (see board note below).
+  Reference build: 2× ESP32-C6 devkit (hub, gate 2), 3× Seeed XIAO ESP32-C5
+  (gates 1, 3, 4)
+- 4× ACS712 current sensor (**prefer the 20 A part** — see note below) + 8× divider
+  resistors (10 kΩ or 5 kΩ — see wiring below) + 4× 100 nF capacitors
 - 4× MG996R servo driving a ball-valve blast gate
 - 1× relay module rated for the collector motor, 2× latching switches (manual +
   external), LEDs + resistors
 - 5 V supply for the sensor rail and servos (**common ground with the ESP32s**)
 
-### Hub pinout (ESP32-C6, ADC1 = GPIO0..GPIO6)
+### Board choice — C5, C6, or any other ESP32
+
+The boards above are simply what this build uses: **C5 and C6 are interchangeable
+on both the hub and the gates**, and any other ESP32 variant works as long as it
+supports ESP-NOW (they all do) and has the required number and type of GPIOs:
+
+- **Hub** — 4× ADC-capable inputs, 2× digital inputs (with internal pull-ups),
+  2× digital outputs.
+- **Gate** — 1× PWM/LEDC-capable output (servo), 2× digital outputs (LEDs).
+
+The provided YAML configs are **suggestions**: set `board:` and the pin
+substitutions to match your particular board, and avoid its strapping pins. Two
+board-specific caveats: dual-band variants (the C5) must be hard-restricted to
+2.4 GHz with `band_mode: 2.4GHZ` or ESP-NOW can go deaf (see the Wi-Fi section),
+and on the classic ESP32/S-series pick **ADC1** pins for the current sensors —
+ADC2 conflicts with Wi-Fi.
+
+### Hub pinout (reference build: ESP32-C6, ADC1 = GPIO0..GPIO6)
 
 | Pin | Function |
 |---|---|
@@ -141,10 +159,27 @@ strapping pins — all left free.
 ### ACS712 input chain (per line)
 
 ```
-  ACS712 VCC -> 5V, GND -> common GND with the ESP32
-  OUT -> 10k -> node A -> 10k -> GND
-  node A -> ESP32 ADC pin,  100nF from node A to GND
+   5 V ────────── VCC ┌────────────┐
+                      │   ACS712   │   machine supply wire runs
+                      │            │   through IP+ / IP-
+   GND ──┬─────── GND └─────┬──────┘
+         │                 OUT
+         │                  │
+         │               [ R1 ]  10 kΩ
+         │                  │
+         │        node A    ●──────────────── ESP32 ADC pin
+         │                  │
+         │            ┌─────┴──────┐
+         │         [ R2 ]         ─┴─  C1
+         │         10 kΩ          ─┬─  100 nF
+         │            │            │
+         └────────────┴────────────┴───────── GND (common with the ESP32!)
 ```
+
+R1 = R2 halves the sensor output — the divider **ratio** is what matters, not the
+absolute value, so **5 kΩ pairs work just as well as 10 kΩ**. Just use the same
+nominal for both resistors of a given sensor. Keep C1 (node A → GND) close to the
+ESP32 pin; it quiets ADC sampling noise.
 
 The ACS712-30A puts out 66 mV/A around a 2.5 V idle midpoint at 5 V. The divider
 halves that to **33 mV/A with a ~1.25 V midpoint**, which keeps the signal inside the
