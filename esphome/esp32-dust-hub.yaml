@@ -7,6 +7,8 @@
 #   GPIO10 ........... dust collector relay
 #   GPIO11 ........... latching manual switch (to GND)
 #   GPIO18 ........... "collector on" indicator LED
+#   GPIO19 ........... latching external switch (to GND): collector
+#                      + opens the gate selected by external_gate_num
 #   (GPIO4/GPIO5 are also ADC-capable but double as strapping/JTAG
 #    pins — left free. GPIO8/GPIO9 are boot strapping pins — avoid.)
 #
@@ -19,12 +21,15 @@
 #   * Broadcasts per-line states + heartbeat to 4 blast-gate valve
 #     nodes over encrypted ESP-NOW with replay protection
 #   * Starts/stops the dust collector via relay:
-#       - 3 s start delay (blast gate opens first)
+#       - 3 s start delay for gate travel (machine, manual switch
+#         and external switch paths alike)
 #       - 10 s run-on after the last machine stops
 #       - 30 s minimum-off lockout (queued starts fire when it
 #         expires if demand persists); reboot implies a 30 s lockout
 #       - relay + LED ALWAYS start OFF after reboot
 #   * Latching manual switch = manual collection mode
+#   * Latching external switch = manual collection mode + opens the
+#     gate selected by external_gate_num over ESP-NOW
 #   * LED on while the collector relay is energized
 #
 # ACS712-30A input chain (per line):
@@ -62,6 +67,8 @@ substitutions:
   collector_relay_pin: GPIO10
   manual_switch_pin: GPIO11   # latching switch to GND
   collector_led_pin: GPIO18   # GPIO -> resistor -> LED -> GND
+  external_switch_pin: GPIO19 # latching switch to GND (collector + one gate)
+  external_gate_num: "4"      # which gate (1-4) the external switch opens
 
 esphome:
   name: ${device_name}
@@ -94,8 +101,14 @@ ota:
     password: !secret ota_password
 
 wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
+  networks:
+    - ssid: !secret wifi_ssid
+      password: !secret wifi_password
+      # Optional, strongest pin: lock to ONE AP's 2.4 GHz radio.
+      # NOTE: bssid is only valid inside a networks: entry, never at
+      # the wifi: top level. Take the BSSID from the mesh UI's 2.4 GHz
+      # radio listing (each band has its own BSSID).
+      # bssid: !secret wifi_bssid
   domain: !secret wifi_domain
   reboot_timeout: 5min
   power_save_mode: none
@@ -103,10 +116,6 @@ wifi:
   ap:
     ssid: ${device_name} Fallback     # 32-char SSID limit: keep it short
     password: !secret wifi_fallback_password
-  # Mesh network notes:
-  #  * Pin the 2.4 GHz channel in the mesh controller if possible.
-  #  * Optionally pin this node to the nearest AP's 2.4 GHz radio:
-  # bssid: "XX:XX:XX:XX:XX:XX"
 
 captive_portal:
 
@@ -163,6 +172,8 @@ sensor:
     pin: ${adc_line1_pin}
     id: adc_line1
     attenuation: 12db
+    samples: 8
+    sampling_mode: avg
     internal: true
 
   - platform: ct_clamp
@@ -182,6 +193,8 @@ sensor:
     pin: ${adc_line2_pin}
     id: adc_line2
     attenuation: 12db
+    samples: 8
+    sampling_mode: avg
     internal: true
 
   - platform: ct_clamp
@@ -199,6 +212,8 @@ sensor:
     pin: ${adc_line3_pin}
     id: adc_line3
     attenuation: 12db
+    samples: 8
+    sampling_mode: avg
     internal: true
 
   - platform: ct_clamp
@@ -216,6 +231,8 @@ sensor:
     pin: ${adc_line4_pin}
     id: adc_line4
     attenuation: 12db
+    samples: 8
+    sampling_mode: avg
     internal: true
 
   - platform: ct_clamp
@@ -261,13 +278,16 @@ sensor:
     update_interval: 60s
 
 # ---------------------------------------------------------------------
-# Machine ON/OFF detection with hysteresis. A state change here is
-# transmitted to the valves immediately by packet_transport.
+# Machine ON/OFF detection with hysteresis (lineN_detect), plus the
+# broadcast wrappers (lineN_current) the valves actually receive:
+# detection ORed with the external switch on its designated gate.
+# A wrapper state change is transmitted to the valves immediately by
+# packet_transport.
 # ---------------------------------------------------------------------
 binary_sensor:
   - platform: analog_threshold
     sensor_id: line1_amps
-    id: line1_current
+    id: line1_detect
     name: "Machine 1 Running"
     device_class: power
     threshold:
@@ -278,7 +298,7 @@ binary_sensor:
 
   - platform: analog_threshold
     sensor_id: line2_amps
-    id: line2_current
+    id: line2_detect
     name: "Machine 2 Running"
     device_class: power
     threshold:
@@ -289,7 +309,7 @@ binary_sensor:
 
   - platform: analog_threshold
     sensor_id: line3_amps
-    id: line3_current
+    id: line3_detect
     name: "Machine 3 Running"
     device_class: power
     threshold:
@@ -300,7 +320,7 @@ binary_sensor:
 
   - platform: analog_threshold
     sensor_id: line4_amps
-    id: line4_current
+    id: line4_detect
     name: "Machine 4 Running"
     device_class: power
     threshold:
@@ -309,15 +329,49 @@ binary_sensor:
     filters:
       - delayed_off: ${current_off_delay}
 
-  # Machine-driven demand:
+  # -------------------------------------------------------------------
+  # Broadcast line states — these ids are what packet_transport sends
+  # and what the gates bind to (remote_id: lineN_current), so the gates
+  # need no changes. Each is the machine detection ORed with the
+  # external switch on its designated gate; the ${external_gate_num}
+  # comparison resolves at compile time, so only one line ever differs
+  # from its detection sensor.
+  # -------------------------------------------------------------------
+  - platform: template
+    id: line1_current
+    internal: true
+    lambda: |-
+      return id(line1_detect).state ||
+             (id(external_collection).state && ${external_gate_num} == 1);
+  - platform: template
+    id: line2_current
+    internal: true
+    lambda: |-
+      return id(line2_detect).state ||
+             (id(external_collection).state && ${external_gate_num} == 2);
+  - platform: template
+    id: line3_current
+    internal: true
+    lambda: |-
+      return id(line3_detect).state ||
+             (id(external_collection).state && ${external_gate_num} == 3);
+  - platform: template
+    id: line4_current
+    internal: true
+    lambda: |-
+      return id(line4_detect).state ||
+             (id(external_collection).state && ${external_gate_num} == 4);
+
+  # Machine-driven demand (detection only — the external switch is a
+  # separate demand source with manual-switch semantics):
   #   delayed_on  = blast gate head start before the collector spins up
   #   delayed_off = run-on to clear the ducts after the last machine
   - platform: template
     id: any_machine_on
     internal: true
     lambda: |-
-      return id(line1_current).state || id(line2_current).state ||
-             id(line3_current).state || id(line4_current).state;
+      return id(line1_detect).state || id(line2_detect).state ||
+             id(line3_detect).state || id(line4_detect).state;
     filters:
       - delayed_on: ${collector_start_delay}
       - delayed_off: ${collector_runon}
@@ -329,17 +383,20 @@ binary_sensor:
           condition:
             and:
               - binary_sensor.is_off: manual_collection
+              - binary_sensor.is_off: external_demand
               - switch.is_off: remote_collection
           then:
             - logger.log: "All machines idle, run-on elapsed -> stopping collector"
             - script.execute: collector_stop
           else:
-            - logger.log: "Machines idle, but manual/remote demand active -> collector stays on"
+            - logger.log: "Machines idle, but manual/external/remote demand active -> collector stays on"
 
   # Manual switch (LATCHING, to GND) — its physical position IS the
   # manual collection mode:
   #   latched ON  -> collector runs (user opens a blast gate by hand);
-  #                  30 s lockout still enforced, no gate-open delay
+  #                  30 s lockout still enforced; the delayed_on below
+  #                  gives the same gate-travel head start as the
+  #                  machine path before the collector spins up
   #   latched OFF -> collector stops unless a machine demands it
   # If left ON across a reboot, the initial state fires on_press and
   # the collector restarts after the 30 s post-boot lockout.
@@ -355,7 +412,8 @@ binary_sensor:
     # is honored after a reboot (fires on_press -> start after lockout).
     trigger_on_initial_state: true
     filters:
-      - delayed_on: 30ms      # contact debounce
+      - delayed_on: ${collector_start_delay}  # gate-travel head start
+                                              # (subsumes debounce)
       - delayed_off: 30ms
     on_press:
       - logger.log: "Manual collection ON -> requesting collector start"
@@ -365,12 +423,60 @@ binary_sensor:
           condition:
             and:
               - binary_sensor.is_off: any_machine_on
+              - binary_sensor.is_off: external_demand
               - switch.is_off: remote_collection
           then:
             - logger.log: "Manual collection OFF, no other demand -> stopping collector"
             - script.execute: collector_stop
           else:
-            - logger.log: "Manual OFF, but machine/remote demand active -> collector stays on"
+            - logger.log: "Manual OFF, but machine/external/remote demand active -> collector stays on"
+
+  # External switch (LATCHING, to GND) — manual-switch semantics
+  # (30 s lockout still enforced, no run-on on release), plus it opens
+  # gate ${external_gate_num}: the broadcast wrapper lineN_current
+  # above ORs this RAW state in, so the gate starts moving immediately.
+  # The collector start comes from external_demand below, delayed for
+  # gate travel — same head start as the machine path.
+  - platform: gpio
+    id: external_collection
+    name: "External Collection"
+    icon: mdi:electric-switch
+    pin:
+      number: ${external_switch_pin}
+      mode: INPUT_PULLUP
+      inverted: true
+    trigger_on_initial_state: true
+    filters:
+      - delayed_on: 30ms      # contact debounce
+      - delayed_off: 30ms
+
+  # Demand-side view of the external switch: ON is delayed for gate
+  # travel, OFF is immediate. Every collector demand check references
+  # THIS id (never the raw switch), so the 5 s relay reconciliation
+  # cannot bypass the head start. A switch left latched ON across a
+  # reboot is honored: state converges via reconciliation even if the
+  # boot-time edge is missed, and the 30 s post-boot lockout applies.
+  - platform: template
+    id: external_demand
+    internal: true
+    lambda: 'return id(external_collection).state;'
+    filters:
+      - delayed_on: ${collector_start_delay}  # gate-travel head start
+    on_press:
+      - logger.log: "External collection ON -> gate ${external_gate_num} opening, starting collector"
+      - script.execute: collector_start_req
+    on_release:
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_off: any_machine_on
+              - binary_sensor.is_off: manual_collection
+              - switch.is_off: remote_collection
+          then:
+            - logger.log: "External collection OFF, no other demand -> stopping collector"
+            - script.execute: collector_stop
+          else:
+            - logger.log: "External OFF, but machine/manual/remote demand active -> collector stays on"
 
   # Diagnostics: relay state visible in HA (relay switch is internal).
   - platform: template
@@ -414,11 +520,12 @@ switch:
             and:
               - binary_sensor.is_off: any_machine_on
               - binary_sensor.is_off: manual_collection
+              - binary_sensor.is_off: external_demand
           then:
             - logger.log: "Remote collection OFF, no other demand -> stopping collector"
             - script.execute: collector_stop
           else:
-            - logger.log: "Remote OFF, but machine/manual demand active -> collector stays on"
+            - logger.log: "Remote OFF, but machine/manual/external demand active -> collector stays on"
 
   # Dust collector relay — internal: all on/off paths go through the
   # lockout logic below. ALWAYS starts OFF after reboot.
@@ -461,6 +568,7 @@ script:
                   or:
                     - binary_sensor.is_on: any_machine_on
                     - binary_sensor.is_on: manual_collection
+                    - binary_sensor.is_on: external_demand
                     - switch.is_on: remote_collection
                 then:
                   - logger.log: "Starting dust collector"
@@ -488,6 +596,7 @@ interval:
               - or:
                   - binary_sensor.is_on: any_machine_on
                   - binary_sensor.is_on: manual_collection
+                  - binary_sensor.is_on: external_demand
                   - switch.is_on: remote_collection
               - switch.is_off: collector_relay
           then:
@@ -497,6 +606,7 @@ interval:
             and:
               - binary_sensor.is_off: any_machine_on
               - binary_sensor.is_off: manual_collection
+              - binary_sensor.is_off: external_demand
               - switch.is_off: remote_collection
               - switch.is_on: collector_relay
           then:

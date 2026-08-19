@@ -16,6 +16,7 @@ remote control. Validated against **ESPHome 2026.7.4**.
    • dust collector relay (GPIO10)                                    • MG996R servo ball valve
    • latching manual switch (GPIO11)                                  • cover entity (damper)
    • collector-on LED (GPIO18)                                        • open/closed LEDs
+   • latching external switch (GPIO19): collector + one gate
 ```
 
 - **Transport**: native ESPHome `espnow` + `packet_transport` (broadcast mode).
@@ -31,10 +32,20 @@ remote control. Validated against **ESPHome 2026.7.4**.
 
 ## Control logic
 
-**Hub** (per line): ADC → `ct_clamp` (AC RMS, cancels ACS712 DC offset) →
-`calibrate_linear` (V→A) → `analog_threshold` (1.5 A on / 0.8 A off hysteresis,
-3 s delayed_off). Collector relay demand = any machine ON, OR latching manual
-switch, OR "Remote Collection" HA template switch. Sequencing: 3 s start delay
+**Hub** (per line): ADC (8-sample avg) → `ct_clamp` (AC RMS, cancels ACS712 DC
+offset) → `calibrate_linear` (V→A) → `analog_threshold` (`lineN_detect`, 1.5 A
+on / 0.8 A off hysteresis, 3 s delayed_off). What gets broadcast is a template
+wrapper `lineN_current` = `lineN_detect` OR (external switch AND N ==
+`external_gate_num`) — the id the gates bind to, so the external switch opens
+its gate with zero gate-side changes. Collector relay demand = any machine ON
+(`any_machine_on` reads `lineN_detect`), OR latching manual switch, OR latching
+external switch (GPIO19; manual-switch semantics + opens gate
+`external_gate_num`), OR "Remote Collection" HA template switch. The 3 s
+gate-travel head start applies on every path except Remote Collection: machine
+via `delayed_on` on `any_machine_on`, manual via `delayed_on` on its GPIO
+sensor, external via internal `external_demand` template (raw switch drives
+the gate wrapper immediately; all demand checks read `external_demand`, so the
+5 s reconciliation can't bypass the delay). Sequencing: 3 s start delay
 (gate opens first), 10 s run-on after last machine stops, **30 s minimum-off
 lockout** (starts during lockout are queued and re-check demand when it
 expires; a reboot implies a fresh 30 s lockout). Relay is `internal:` — every

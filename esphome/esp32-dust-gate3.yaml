@@ -10,8 +10,8 @@ substitutions:
   # Servo trim — calibrated on THIS rig (see procedure in common file):
   sweep_step: "0.045"
   servo_direction: "1.0"
-  level_min: "4.1%"
-  level_max: "9.15%"
+  level_min: "5.1%"
+  level_max: "10.0%"
 
 packages:
   dust_gate: !include dust-gate-common.yaml
