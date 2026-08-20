@@ -69,9 +69,11 @@ via `delayed_on` on `any_machine_on`, the manual switch via `delayed_on` on its 
 sensor, and the external switch via the internal `external_demand` template — its
 raw state opens the gate immediately, while all demand checks read the delayed view,
 so the 5 s reconciliation cannot bypass the head start. `external_demand` also
-carries the machine path's 15 s `delayed_off`, so releasing the external switch
-behaves exactly like a machine stopping: the collector runs on, and the wrapper
-latch keeps its gate open until the relay drops.
+carries the machine path's 15 s `delayed_off`, and the configured gate's wrapper
+ORs `external_demand` in directly — so on release the collector runs on with the
+gate held open, and the gate closes on the same signal edge that stops the relay
+(no reliance on the relay latch, which phantom current blips can release early
+on an uncalibrated bench).
 
 The relay itself is `internal:` — every path goes through
 the `collector_start_req` / `collector_stop` scripts, so the 30 s lockout can never

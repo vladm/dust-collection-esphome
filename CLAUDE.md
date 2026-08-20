@@ -51,7 +51,10 @@ machine via `delayed_on` on `any_machine_on`, manual via `delayed_on` on its
 GPIO sensor, external via internal `external_demand` template (raw switch
 drives the gate wrapper immediately; all demand checks read `external_demand`,
 so the 5 s reconciliation can't bypass the delay; its `delayed_off` gives
-release the same 15 s run-on as a stopping machine, wrapper latch included).
+release the same 15 s run-on as a stopping machine, and the designated gate's
+wrapper ORs `external_demand` in directly, so that gate closes on the same
+edge that stops the relay — independent of the latch, which phantom detect
+blips from floating ADCs can release early on the bench).
 Sequencing: 3 s start delay (gate opens first), 15 s run-on after last machine
 stops or external release, **30 s minimum-off
 lockout** (starts during lockout are queued and re-check demand when it

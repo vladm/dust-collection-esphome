@@ -332,10 +332,13 @@ binary_sensor:
   # Broadcast line states — these ids are what packet_transport sends
   # and what the gates bind to (remote_id: lineN_current), so the gates
   # need no changes. Each is:
-  #   * the machine detection ORed with the external switch on its
-  #     designated gate (the ${external_gate_num} comparison resolves
-  #     at compile time, so only one line ever differs from its
-  #     detection sensor), PLUS
+  #   * the machine detection ORed, on the designated gate only, with
+  #     the external switch — BOTH its raw state (immediate open on
+  #     flip) and external_demand (whose delayed_off keeps the gate
+  #     demand ON through the run-on, so the gate closes on the same
+  #     edge that stops the relay). The ${external_gate_num} comparison
+  #     resolves at compile time, so only one line ever differs from
+  #     its detection sensor. PLUS
   #   * a run-on hold: once ON, the wrapper latches (it reads its own
   #     state) while the collector relay is still energized and no
   #     other demand source is active — so after the last machine
@@ -344,14 +347,17 @@ binary_sensor:
   #     open gate and the collector is never dead-headed). If another
   #     machine / manual / external / remote demand keeps the relay on,
   #     the hold releases immediately so a stale gate doesn't bleed
-  #     suction from the active one.
+  #     suction from the active one. NOTE: on the bench, floating ADC
+  #     lines can blip phantom lineN_detect ON and release this hold
+  #     early — the external path doesn't depend on it (see above).
   # -------------------------------------------------------------------
   - platform: template
     id: line1_current
     internal: true
     lambda: |-
       if (id(line1_detect).state ||
-          (id(external_collection).state && ${external_gate_num} == 1))
+          ((id(external_collection).state || id(external_demand).state) &&
+           ${external_gate_num} == 1))
         return true;
       bool other_demand = id(line2_detect).state || id(line3_detect).state ||
                           id(line4_detect).state ||
@@ -365,7 +371,8 @@ binary_sensor:
     internal: true
     lambda: |-
       if (id(line2_detect).state ||
-          (id(external_collection).state && ${external_gate_num} == 2))
+          ((id(external_collection).state || id(external_demand).state) &&
+           ${external_gate_num} == 2))
         return true;
       bool other_demand = id(line1_detect).state || id(line3_detect).state ||
                           id(line4_detect).state ||
@@ -379,7 +386,8 @@ binary_sensor:
     internal: true
     lambda: |-
       if (id(line3_detect).state ||
-          (id(external_collection).state && ${external_gate_num} == 3))
+          ((id(external_collection).state || id(external_demand).state) &&
+           ${external_gate_num} == 3))
         return true;
       bool other_demand = id(line1_detect).state || id(line2_detect).state ||
                           id(line4_detect).state ||
@@ -393,7 +401,8 @@ binary_sensor:
     internal: true
     lambda: |-
       if (id(line4_detect).state ||
-          (id(external_collection).state && ${external_gate_num} == 4))
+          ((id(external_collection).state || id(external_demand).state) &&
+           ${external_gate_num} == 4))
         return true;
       bool other_demand = id(line1_detect).state || id(line2_detect).state ||
                           id(line3_detect).state ||
@@ -494,10 +503,11 @@ binary_sensor:
 
   # Demand-side view of the external switch: ON is delayed for gate
   # travel, OFF is delayed by the run-on — the same sequencing as the
-  # machine path (head start before spin-up, duct purge after release;
-  # the wrapper latch above then holds gate ${external_gate_num} open
-  # until the relay actually drops). Every collector demand check
-  # references THIS id (never the raw switch), so the 5 s relay
+  # machine path (head start before spin-up, duct purge after release).
+  # The gate-${external_gate_num} wrapper above ORs this id in, so the
+  # gate stays open through the run-on and closes on the very edge
+  # that triggers the collector stop below. Every collector demand
+  # check references THIS id (never the raw switch), so the 5 s relay
   # reconciliation cannot bypass either delay. A switch left latched ON
   # across a reboot is honored: state converges via reconciliation even
   # if the boot-time edge is missed, and the 30 s post-boot lockout
