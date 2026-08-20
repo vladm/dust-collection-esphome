@@ -23,15 +23,17 @@
 #   * Starts/stops the dust collector via relay:
 #       - 3 s start delay for gate travel (machine, manual switch
 #         and external switch paths alike)
-#       - 15 s run-on after the last machine stops; the stopped
-#         machine's gate is held open until the relay actually drops
-#         (purge through the open gate, no dead-heading)
+#       - 15 s run-on after the last machine stops or the external
+#         switch is released; the gate in use is held open until the
+#         relay actually drops (purge through the open gate, no
+#         dead-heading)
 #       - 30 s minimum-off lockout (queued starts fire when it
 #         expires if demand persists); reboot implies a 30 s lockout
 #       - relay + LED ALWAYS start OFF after reboot
 #   * Latching manual switch = manual collection mode
-#   * Latching external switch = manual collection mode + opens the
-#     gate selected by external_gate_num over ESP-NOW
+#   * Latching external switch = machine-path semantics (start delay,
+#     run-on) + opens the gate selected by external_gate_num over
+#     ESP-NOW
 #   * LED on while the collector relay is energized
 #
 # ACS712-30A input chain (per line):
@@ -51,7 +53,7 @@ substitutions:
 
   # --- Current sensing ---
   sample_duration: 250ms      # RMS window (>= a few AC cycles)
-  samples: 12                 # samples to average for RMS calculation
+  samples: 15                # samples to average for RMS calculation
   sense_interval: 1s          # how often each line is measured
   on_threshold: "1.5"         # RMS amps: machine ON above this
   off_threshold: "0.8"        # ...OFF below this (hysteresis)
@@ -402,7 +404,7 @@ binary_sensor:
              !other_demand;
 
   # Machine-driven demand (detection only — the external switch is a
-  # separate demand source with manual-switch semantics):
+  # separate demand source with the same timing, see external_demand):
   #   delayed_on  = blast gate head start before the collector spins up
   #   delayed_off = run-on to clear the ducts after the last machine
   - platform: template
@@ -470,12 +472,13 @@ binary_sensor:
           else:
             - logger.log: "Manual OFF, but machine/external/remote demand active -> collector stays on"
 
-  # External switch (LATCHING, to GND) — manual-switch semantics
-  # (30 s lockout still enforced, no run-on on release), plus it opens
-  # gate ${external_gate_num}: the broadcast wrapper lineN_current
-  # above ORs this RAW state in, so the gate starts moving immediately.
-  # The collector start comes from external_demand below, delayed for
-  # gate travel — same head start as the machine path.
+  # External switch (LATCHING, to GND) — machine-path semantics
+  # (30 s lockout enforced, run-on after release via external_demand),
+  # plus it opens gate ${external_gate_num}: the broadcast wrapper
+  # lineN_current above ORs this RAW state in, so the gate starts
+  # moving immediately. The collector start comes from external_demand
+  # below, delayed for gate travel — same head start as the machine
+  # path.
   - platform: gpio
     id: external_collection
     name: "External Collection"
@@ -490,17 +493,22 @@ binary_sensor:
       - delayed_off: 30ms
 
   # Demand-side view of the external switch: ON is delayed for gate
-  # travel, OFF is immediate. Every collector demand check references
-  # THIS id (never the raw switch), so the 5 s relay reconciliation
-  # cannot bypass the head start. A switch left latched ON across a
-  # reboot is honored: state converges via reconciliation even if the
-  # boot-time edge is missed, and the 30 s post-boot lockout applies.
+  # travel, OFF is delayed by the run-on — the same sequencing as the
+  # machine path (head start before spin-up, duct purge after release;
+  # the wrapper latch above then holds gate ${external_gate_num} open
+  # until the relay actually drops). Every collector demand check
+  # references THIS id (never the raw switch), so the 5 s relay
+  # reconciliation cannot bypass either delay. A switch left latched ON
+  # across a reboot is honored: state converges via reconciliation even
+  # if the boot-time edge is missed, and the 30 s post-boot lockout
+  # applies.
   - platform: template
     id: external_demand
     internal: true
     lambda: 'return id(external_collection).state;'
     filters:
       - delayed_on: ${collector_start_delay}  # gate-travel head start
+      - delayed_off: ${collector_runon}       # duct purge after release
     on_press:
       - logger.log: "External collection ON -> gate ${external_gate_num} opening, starting collector"
       - script.execute: collector_start_req
@@ -512,10 +520,10 @@ binary_sensor:
               - binary_sensor.is_off: manual_collection
               - switch.is_off: remote_collection
           then:
-            - logger.log: "External collection OFF, no other demand -> stopping collector"
+            - logger.log: "External collection off, run-on elapsed -> stopping collector"
             - script.execute: collector_stop
           else:
-            - logger.log: "External OFF, but machine/manual/remote demand active -> collector stays on"
+            - logger.log: "External off, but machine/manual/remote demand active -> collector stays on"
 
   # Diagnostics: relay state visible in HA (relay switch is internal).
   - platform: template

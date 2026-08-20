@@ -21,7 +21,8 @@ collects. Validated against **ESPHome 2026.7.4**.
   the last machine stops, and a 30 s minimum-off lockout protects the motor.
 - Manual paths: a latching hardware switch at the collector, a second latching
   "external" switch that also opens one configured gate (`external_gate_num`,
-  currently gate 4), plus a "Remote Collection" switch for HA/voice.
+  currently gate 4) with full machine-path sequencing — head start, run-on, gate
+  held open until the relay drops — plus a "Remote Collection" switch for HA/voice.
 - Fails safe: gates close if the hub goes quiet for 15 s, and every node closes its
   valve and starts the relay OFF on boot.
 
@@ -67,7 +68,10 @@ Collection gives the gate a 3 s travel head start before spin-up: the machine pa
 via `delayed_on` on `any_machine_on`, the manual switch via `delayed_on` on its GPIO
 sensor, and the external switch via the internal `external_demand` template — its
 raw state opens the gate immediately, while all demand checks read the delayed view,
-so the 5 s reconciliation cannot bypass the head start.
+so the 5 s reconciliation cannot bypass the head start. `external_demand` also
+carries the machine path's 15 s `delayed_off`, so releasing the external switch
+behaves exactly like a machine stopping: the collector runs on, and the wrapper
+latch keeps its gate open until the relay drops.
 
 The relay itself is `internal:` — every path goes through
 the `collector_start_req` / `collector_stop` scripts, so the 30 s lockout can never

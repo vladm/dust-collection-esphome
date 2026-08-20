@@ -44,14 +44,16 @@ so the last machine's gate closes only after the relay drops — ducts purge
 through the open gate, collector never dead-heads. Another active demand
 releases the hold immediately (a stale open gate would bleed suction). Collector relay demand = any machine ON
 (`any_machine_on` reads `lineN_detect`), OR latching manual switch, OR latching
-external switch (GPIO11; manual-switch semantics + opens gate
-`external_gate_num`), OR "Remote Collection" HA template switch. The 3 s
-gate-travel head start applies on every path except Remote Collection: machine
-via `delayed_on` on `any_machine_on`, manual via `delayed_on` on its GPIO
-sensor, external via internal `external_demand` template (raw switch drives
-the gate wrapper immediately; all demand checks read `external_demand`, so the
-5 s reconciliation can't bypass the delay). Sequencing: 3 s start delay
-(gate opens first), 15 s run-on after last machine stops, **30 s minimum-off
+external switch (GPIO11; machine-path timing — 3 s head start + 15 s run-on —
+and opens gate `external_gate_num`), OR "Remote Collection" HA template switch.
+The 3 s gate-travel head start applies on every path except Remote Collection:
+machine via `delayed_on` on `any_machine_on`, manual via `delayed_on` on its
+GPIO sensor, external via internal `external_demand` template (raw switch
+drives the gate wrapper immediately; all demand checks read `external_demand`,
+so the 5 s reconciliation can't bypass the delay; its `delayed_off` gives
+release the same 15 s run-on as a stopping machine, wrapper latch included).
+Sequencing: 3 s start delay (gate opens first), 15 s run-on after last machine
+stops or external release, **30 s minimum-off
 lockout** (starts during lockout are queued and re-check demand when it
 expires; a reboot implies a fresh 30 s lockout). Relay is `internal:` — every
 path goes through `collector_start_req` / `collector_stop` scripts; state is
