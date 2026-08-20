@@ -11,7 +11,10 @@
 #
 # Behavior:
 #   * Machine on its line starts -> gate opens immediately
-#   * Machine stops -> gate closes (hub debounces with 3 s delayed_off)
+#   * Machine stops -> hub holds the line state ON through the
+#     collector run-on, so the gate closes only after the collector
+#     relay drops (or immediately if another demand source keeps the
+#     collector running — a stale open gate would bleed suction)
 #   * Reconciliation every 5 s: hub state is authoritative
 #   * Hub silent for 15 s -> fail-safe close (collector relay is on the
 #     hub, so in that scenario the collector is off too)

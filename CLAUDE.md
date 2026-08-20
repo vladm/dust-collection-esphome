@@ -37,7 +37,12 @@ offset) → `calibrate_linear` (V→A) → `analog_threshold` (`lineN_detect`, 1
 on / 0.8 A off hysteresis, 3 s delayed_off). What gets broadcast is a template
 wrapper `lineN_current` = `lineN_detect` OR (external switch AND N ==
 `external_gate_num`) — the id the gates bind to, so the external switch opens
-its gate with zero gate-side changes. Collector relay demand = any machine ON
+its gate with zero gate-side changes. The wrapper also self-latches through
+the run-on: once ON it holds while the collector relay is energized and no
+other demand source (other lines' detect, manual, external, remote) is active,
+so the last machine's gate closes only after the relay drops — ducts purge
+through the open gate, collector never dead-heads. Another active demand
+releases the hold immediately (a stale open gate would bleed suction). Collector relay demand = any machine ON
 (`any_machine_on` reads `lineN_detect`), OR latching manual switch, OR latching
 external switch (GPIO11; manual-switch semantics + opens gate
 `external_gate_num`), OR "Remote Collection" HA template switch. The 3 s
@@ -46,7 +51,7 @@ via `delayed_on` on `any_machine_on`, manual via `delayed_on` on its GPIO
 sensor, external via internal `external_demand` template (raw switch drives
 the gate wrapper immediately; all demand checks read `external_demand`, so the
 5 s reconciliation can't bypass the delay). Sequencing: 3 s start delay
-(gate opens first), 10 s run-on after last machine stops, **30 s minimum-off
+(gate opens first), 15 s run-on after last machine stops, **30 s minimum-off
 lockout** (starts during lockout are queued and re-check demand when it
 expires; a reboot implies a fresh 30 s lockout). Relay is `internal:` — every
 path goes through `collector_start_req` / `collector_stop` scripts; state is

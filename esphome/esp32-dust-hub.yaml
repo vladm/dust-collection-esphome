@@ -23,7 +23,9 @@
 #   * Starts/stops the dust collector via relay:
 #       - 3 s start delay for gate travel (machine, manual switch
 #         and external switch paths alike)
-#       - 10 s run-on after the last machine stops
+#       - 15 s run-on after the last machine stops; the stopped
+#         machine's gate is held open until the relay actually drops
+#         (purge through the open gate, no dead-heading)
 #       - 30 s minimum-off lockout (queued starts fire when it
 #         expires if demand persists); reboot implies a 30 s lockout
 #       - relay + LED ALWAYS start OFF after reboot
@@ -48,7 +50,8 @@ substitutions:
   heartbeat_interval: 2s      # heartbeat publish
 
   # --- Current sensing ---
-  sample_duration: 200ms      # RMS window (>= a few AC cycles)
+  sample_duration: 250ms      # RMS window (>= a few AC cycles)
+  samples: 12                 # samples to average for RMS calculation
   sense_interval: 1s          # how often each line is measured
   on_threshold: "1.5"         # RMS amps: machine ON above this
   off_threshold: "0.8"        # ...OFF below this (hysteresis)
@@ -56,7 +59,7 @@ substitutions:
 
   # --- Dust collector relay ---
   collector_start_delay: 3s   # gate travel time before spin-up
-  collector_runon: 10s        # run-on after last machine stops
+  collector_runon: 15s        # run-on after last machine stops
   collector_min_off_ms: "30000"  # minimum time OFF before next ON
 
   # --- Pins (ESP32-C6) ---
@@ -172,7 +175,7 @@ sensor:
     pin: ${adc_line1_pin}
     id: adc_line1
     attenuation: 12db
-    samples: 8
+    samples: ${samples}
     sampling_mode: avg
     internal: true
 
@@ -195,7 +198,7 @@ sensor:
     pin: ${adc_line2_pin}
     id: adc_line2
     attenuation: 12db
-    samples: 8
+    samples: ${samples}
     sampling_mode: avg
     internal: true
 
@@ -214,7 +217,7 @@ sensor:
     pin: ${adc_line3_pin}
     id: adc_line3
     attenuation: 12db
-    samples: 8
+    samples: ${samples}
     sampling_mode: avg
     internal: true
 
@@ -233,7 +236,7 @@ sensor:
     pin: ${adc_line4_pin}
     id: adc_line4
     attenuation: 12db
-    samples: 8
+    samples: ${samples}
     sampling_mode: avg
     internal: true
 
@@ -334,35 +337,77 @@ binary_sensor:
   # -------------------------------------------------------------------
   # Broadcast line states — these ids are what packet_transport sends
   # and what the gates bind to (remote_id: lineN_current), so the gates
-  # need no changes. Each is the machine detection ORed with the
-  # external switch on its designated gate; the ${external_gate_num}
-  # comparison resolves at compile time, so only one line ever differs
-  # from its detection sensor.
+  # need no changes. Each is:
+  #   * the machine detection ORed with the external switch on its
+  #     designated gate (the ${external_gate_num} comparison resolves
+  #     at compile time, so only one line ever differs from its
+  #     detection sensor), PLUS
+  #   * a run-on hold: once ON, the wrapper latches (it reads its own
+  #     state) while the collector relay is still energized and no
+  #     other demand source is active — so after the last machine
+  #     stops, its gate stays open through the collector run-on and
+  #     closes only when the relay drops (the ducts purge through the
+  #     open gate and the collector is never dead-headed). If another
+  #     machine / manual / external / remote demand keeps the relay on,
+  #     the hold releases immediately so a stale gate doesn't bleed
+  #     suction from the active one.
   # -------------------------------------------------------------------
   - platform: template
     id: line1_current
     internal: true
     lambda: |-
-      return id(line1_detect).state ||
-             (id(external_collection).state && ${external_gate_num} == 1);
+      if (id(line1_detect).state ||
+          (id(external_collection).state && ${external_gate_num} == 1))
+        return true;
+      bool other_demand = id(line2_detect).state || id(line3_detect).state ||
+                          id(line4_detect).state ||
+                          id(manual_collection).state ||
+                          id(external_collection).state ||
+                          id(remote_collection).state;
+      return id(line1_current).state && id(collector_relay).state &&
+             !other_demand;
   - platform: template
     id: line2_current
     internal: true
     lambda: |-
-      return id(line2_detect).state ||
-             (id(external_collection).state && ${external_gate_num} == 2);
+      if (id(line2_detect).state ||
+          (id(external_collection).state && ${external_gate_num} == 2))
+        return true;
+      bool other_demand = id(line1_detect).state || id(line3_detect).state ||
+                          id(line4_detect).state ||
+                          id(manual_collection).state ||
+                          id(external_collection).state ||
+                          id(remote_collection).state;
+      return id(line2_current).state && id(collector_relay).state &&
+             !other_demand;
   - platform: template
     id: line3_current
     internal: true
     lambda: |-
-      return id(line3_detect).state ||
-             (id(external_collection).state && ${external_gate_num} == 3);
+      if (id(line3_detect).state ||
+          (id(external_collection).state && ${external_gate_num} == 3))
+        return true;
+      bool other_demand = id(line1_detect).state || id(line2_detect).state ||
+                          id(line4_detect).state ||
+                          id(manual_collection).state ||
+                          id(external_collection).state ||
+                          id(remote_collection).state;
+      return id(line3_current).state && id(collector_relay).state &&
+             !other_demand;
   - platform: template
     id: line4_current
     internal: true
     lambda: |-
-      return id(line4_detect).state ||
-             (id(external_collection).state && ${external_gate_num} == 4);
+      if (id(line4_detect).state ||
+          (id(external_collection).state && ${external_gate_num} == 4))
+        return true;
+      bool other_demand = id(line1_detect).state || id(line2_detect).state ||
+                          id(line3_detect).state ||
+                          id(manual_collection).state ||
+                          id(external_collection).state ||
+                          id(remote_collection).state;
+      return id(line4_current).state && id(collector_relay).state &&
+             !other_demand;
 
   # Machine-driven demand (detection only — the external switch is a
   # separate demand source with manual-switch semantics):

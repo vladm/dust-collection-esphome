@@ -14,8 +14,10 @@ collects. Validated against **ESPHome 2026.7.4**.
 
 - Detects which machine is running from AC current (ACS712 hall sensors, RMS with
   hysteresis) — no wiring changes to the machines beyond clamping the supply line.
-- Opens only the blast gate for that machine; closes it when the machine stops.
-- Sequences the collector: gate opens first (3 s), collector runs on for 10 s after
+- Opens only the blast gate for that machine; when the machine stops, the gate is
+  held open through the collector run-on and closes only after the relay drops
+  (unless another machine takes over, in which case it closes right away).
+- Sequences the collector: gate opens first (3 s), collector runs on for 15 s after
   the last machine stops, and a 30 s minimum-off lockout protects the motor.
 - Manual paths: a latching hardware switch at the collector, a second latching
   "external" switch that also opens one configured gate (`external_gate_num`,
@@ -51,7 +53,13 @@ Per line: `adc` (8-sample average) → `ct_clamp` (AC RMS, cancels the ACS712 DC
 offset) → `calibrate_linear` (volts → amps) → `analog_threshold` (`lineN_detect`:
 1.5 A on / 0.8 A off, 3 s `delayed_off`). What the gates receive is a template
 wrapper `lineN_current` = detection OR the external switch on its configured gate,
-so the external switch opens its gate through the normal ESP-NOW path.
+so the external switch opens its gate through the normal ESP-NOW path. The wrapper
+also latches through the run-on: once ON it holds while the collector relay is
+still energized and no other demand source is active, so the last machine's gate
+closes only after the relay turns off (the ducts purge through the open gate and
+the collector is never dead-headed). If another machine / manual / external /
+remote demand keeps the relay running, the hold releases immediately so a stale
+gate doesn't bleed suction from the active one.
 
 Collector demand = **any machine running** OR **latching manual switch** OR
 **latching external switch** OR **"Remote Collection"**. Every path except Remote
@@ -283,12 +291,12 @@ Hub timings, in `esp32-dust-hub.yaml` `substitutions:`
 
 | Substitution | Default | Meaning |
 |---|---|---|
-| `sample_duration` | `200ms` | RMS window (several AC cycles) |
+| `sample_duration` | `250ms` | RMS window (several AC cycles) |
 | `sense_interval` | `1s` | How often each line is measured |
 | `on_threshold` / `off_threshold` | `1.5` / `0.8` A | Machine ON/OFF hysteresis |
 | `current_off_delay` | `3s` | Rides through brief current dips |
 | `collector_start_delay` | `3s` | Gate head start before spin-up |
-| `collector_runon` | `10s` | Run-on after the last machine stops |
+| `collector_runon` | `15s` | Run-on after the last machine stops (gate stays open until the relay drops) |
 | `collector_min_off_ms` | `30000` | Minimum-off lockout |
 | `reconcile_interval` | `5s` | Full-state broadcast |
 | `heartbeat_interval` | `2s` | Heartbeat publish |
