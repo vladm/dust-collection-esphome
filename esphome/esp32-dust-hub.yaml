@@ -260,23 +260,15 @@ sensor:
   - platform: copy
     source_id: line1_amps
     name: "Line 1 Current"
-    filters:
-      - throttle_average: 30s
   - platform: copy
     source_id: line2_amps
     name: "Line 2 Current"
-    filters:
-      - throttle_average: 30s
   - platform: copy
     source_id: line3_amps
     name: "Line 3 Current"
-    filters:
-      - throttle_average: 30s
   - platform: copy
     source_id: line4_amps
     name: "Line 4 Current"
-    filters:
-      - throttle_average: 30s
 
   - platform: wifi_signal
     name: "WiFi Signal"
