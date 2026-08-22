@@ -103,8 +103,8 @@ optional `wifi_bssid_2g`.
   100 nF node A → GND) → 33 mV/A, ~1.25 V midpoint, inside the ESP32 ADC
   linear range. `calibrate_linear: 0.033 → 1.0` assumes the divider.
   Grounds of the 5 V sensor rail and ESP32 must be common.
-- **Floating ADC pins read 1–2 phantom amps** (noise RMS) — expected on the
-  bench with no sensors attached; disappears once the low-impedance ACS712
+- **Floating ADC pins read up to 0..0.2 phantom amps** (noise RMS) — expected on
+  the bench with no sensors attached; disappears once the low-impedance ACS712
   outputs are connected. Thresholds need per-line calibration against real
   machine draw (30 A parts have the family's highest noise floor in amps).
 - **Servo endpoints** are per-rig and live in each gate file: gate 1
