@@ -10,6 +10,10 @@ HA (or the ESPHome dashboard) is used only for monitoring, calibration and remot
 override; if the network or HA is down, the system still senses, gates and
 collects. Validated against **ESPHome 2026.7.4**.
 
+I've published parametric enclosure model for [gate control here](https://makerworld.com/en/models/3235178-dust-blast-gate-control-box-parametric).
+You can find several models online for ball valve blast gates and design an interface
+adapter between gate controlling module and ball valve.
+
 ## What it does
 
 - Detects which machine is running from AC current (ACS712 hall sensors, RMS with
