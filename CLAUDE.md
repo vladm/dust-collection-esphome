@@ -133,6 +133,11 @@ boot-close) every 5 min even though ESP-NOW itself would keep working.
 - **"Hub Link OK"** (gate): ON = heartbeat flowing, fail-safe armed. OFF while
   "Machine Running (remote)" has a state = heartbeat missing → reconciliation
   disabled. Both dead = radio path broken (check band/channel first).
+- **Gate LED link-down blink**: while the hub heartbeat is missing (never
+  received since boot, or stale — same condition that drops Hub Link OK), the
+  LED for the current position flashes at 4 Hz (closed LED if closed, opened
+  LED if open, both if mid-travel); steady LED returns with the heartbeat.
+  Distinct from the travel indication, which *alternates* the two LEDs.
 - Log narrative: gates log open/close/reconcile/fail-safe decisions; hub logs
   every collector decision incl. "Collector start deferred: 30 s minimum-off
   lockout active" / "Starting dust collector" / "Lockout expired but demand

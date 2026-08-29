@@ -58,8 +58,9 @@ substitutions:
   on_threshold: "1.5"         # RMS amps: machine ON above this
   off_threshold: "0.8"        # ...OFF below this (hysteresis)
   current_off_delay: 3s       # ride through brief dips
-  report_noise_floor: "0.2"   # RMS amps: HA-facing readings below this
+  report_noise_floor: "0.3"   # RMS amps: HA-facing readings below this
                               # report as 0 (ADC noise floor)
+  report_interval: 10s        # HA-facing amp readings publish rate
 
   # --- Dust collector relay ---
   collector_start_delay: 3s   # gate travel time before spin-up
@@ -256,30 +257,36 @@ sensor:
           - 0.033 -> 1.0
 
   # -------------------------------------------------------------------
-  # HA-facing amp readings, decoupled from detection. Readings below
-  # ${report_noise_floor} are clamped to 0 so ADC noise (0..0.2 A RMS
-  # even on unconnected inputs) doesn't show as phantom current in HA.
-  # Detection (analog_threshold on the internal sensors) is unaffected.
+  # HA-facing amp readings, decoupled from detection. Throttled to one
+  # publish per ${report_interval} (latest 1 s reading, no averaging).
+  # Readings below ${report_noise_floor} are clamped to 0 so ADC noise
+  # (0..0.2 A RMS even on unconnected inputs) doesn't show as phantom
+  # current in HA. Detection (analog_threshold on the internal sensors)
+  # is unaffected — it keeps the full 1 s rate and raw values.
   # -------------------------------------------------------------------
   - platform: copy
     source_id: line1_amps
     name: "Line 1 Current"
     filters:
+      - throttle: ${report_interval}
       - lambda: 'return x < ${report_noise_floor} ? 0.0f : x;'
   - platform: copy
     source_id: line2_amps
     name: "Line 2 Current"
     filters:
+      - throttle: ${report_interval}
       - lambda: 'return x < ${report_noise_floor} ? 0.0f : x;'
   - platform: copy
     source_id: line3_amps
     name: "Line 3 Current"
     filters:
+      - throttle: ${report_interval}
       - lambda: 'return x < ${report_noise_floor} ? 0.0f : x;'
   - platform: copy
     source_id: line4_amps
     name: "Line 4 Current"
     filters:
+      - throttle: ${report_interval}
       - lambda: 'return x < ${report_noise_floor} ? 0.0f : x;'
 
   - platform: wifi_signal
