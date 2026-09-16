@@ -4,7 +4,7 @@ ESPHome-based, Home-Assistant-independent automation for a 4-machine workshop
 dust collection system. A hub senses which machine is drawing current, opens the
 matching blast gate over ESP-NOW, and starts the dust collector. All control
 logic runs on the ESP32s themselves; HA is used only for monitoring and optional
-remote control. Validated against **ESPHome 2026.7.4**.
+remote control. Validated against **ESPHome 2026.9.0**.
 
 ## Architecture
 
@@ -84,7 +84,7 @@ detaching caused fall-back).
 | `esp32-dust-gate2.yaml` | Gate 2 (C6 devkit): overrides board + pins + trim |
 | `esp32-dust-gate3.yaml` | Gate 3 (XIAO C5): trim + `wifi: band_mode: 2.4GHZ` |
 | `esp32-dust-gate4.yaml` | Gate 4 (XIAO C5): trim + `wifi: band_mode: 2.4GHZ`; target of the hub's external switch |
-| `.github/workflows/validate.yml` | CI: `esphome config` on all `esp32-dust-*.yaml` in the pinned Docker image (2026.7.4); secrets come from the sample file, whose dummy values must stay format-valid |
+| `.github/workflows/validate.yml` | CI: `esphome config` on all `esp32-dust-*.yaml` in the pinned Docker image (2026.9.0); secrets come from the sample file, whose dummy values must stay format-valid |
 
 Per-device files carry only substitutions (device_name, line_channel, board,
 pins, servo trim) + `packages: !include dust-gate-common.yaml`. Main-file
@@ -151,7 +151,7 @@ boot-close) every 5 min even though ESP-NOW itself would keep working.
 - Debug component + Reset Reason / Device Info text sensors on all nodes
   (watch for brownout boot loops on the bench).
 
-## ESPHome 2026.7.4 gotchas encountered
+## ESPHome 2026.9.0 gotchas encountered
 
 1. Consumer `packet_transport`: `encryption` belongs under the provider entry.
 2. `packet_transport` binary sensor with `name:` requires explicit `internal:`.

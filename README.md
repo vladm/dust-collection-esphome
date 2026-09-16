@@ -8,7 +8,7 @@ collector on a relay.
 All control logic runs on the ESP32s themselves — **Home Assistant is optional**.
 HA (or the ESPHome dashboard) is used only for monitoring, calibration and remote
 override; if the network or HA is down, the system still senses, gates and
-collects. Validated against **ESPHome 2026.7.4**.
+collects. Validated against **ESPHome 2026.9.0**.
 
 I've published parametric enclosure model for [gate control here](https://makerworld.com/en/models/3235178-dust-blast-gate-control-box-parametric).
 You can find several models online for ball valve blast gates and design an interface
@@ -377,7 +377,7 @@ boot-close) every 5 minutes even though ESP-NOW itself would have kept working.
 - The `debug` component plus Reset Reason / Device Info text sensors are on every
   node — watch for brownout boot loops on the bench.
 
-## ESPHome 2026.7.4 gotchas hit while building this
+## ESPHome 2026.9.0 gotchas hit while building this
 
 1. On a **consumer** `packet_transport`, `encryption` belongs under the provider
    entry. Top-level `encryption:` is for outgoing broadcasts and fails validation on

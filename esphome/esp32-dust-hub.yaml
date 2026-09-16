@@ -81,6 +81,7 @@ substitutions:
 esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
+  min_version: "2026.9.0"
 
 esp32:
   board: esp32-c6-devkitc-1   # adjust to your exact C6 board
