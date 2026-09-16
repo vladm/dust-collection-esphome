@@ -23,7 +23,8 @@
 
 substitutions:
   # ---- Overridden per device (defaults here are placeholders) ----
-  device_name: esp32-dust-gateX
+  device_name: esp32-dust-gate-common
+  friendly_name: "Dust Gate Common"
   line_channel: lineX_current
   # Board + pins: XIAO ESP32-C5 defaults; C6 gates override all four.
   board: seeed_xiao_esp32c5
@@ -48,7 +49,7 @@ substitutions:
 
 esphome:
   name: ${device_name}
-  friendly_name: ${device_name}
+  friendly_name: ${friendly_name}
   on_boot:
     priority: -100
     then:
@@ -96,7 +97,8 @@ api:
 
 ota:
   - platform: esphome
-    password: !secret ota_password
+    encryption:
+    #password: !secret ota_password
 
 # Wi-Fi notes for the two XIAO ESP32-C5 nodes (dual-band!):
 #   * MUST be prevented from associating to 5 GHz, or ESP-NOW from the
@@ -132,6 +134,17 @@ wifi:
     password: !secret wifi_fallback_password
 
 captive_portal:
+
+web_server:
+  port: 80
+  version: 3
+  local: true
+  ota: false
+  auth:
+    username: !secret web_username
+    password: !secret web_password
+    type: digest
+
 
 # ---------------------------------------------------------------------
 # Fail-safe watchdog state

@@ -5,6 +5,7 @@
 # =====================================================================
 substitutions:
   device_name: esp32-dust-gate3
+  friendly_name: "Dust Gate 3"
   line_channel: line3_current
   # Board + pins: C5 defaults from the package already match this node.
   # Servo trim — calibrated on THIS rig (see procedure in common file):
@@ -21,3 +22,7 @@ packages:
 # (Merges into the package's wifi config; option doesn't exist on C6.)
 wifi:
   band_mode: 2.4GHZ
+  networks:
+    - ssid: !secret wifi_ssid
+      password: !secret wifi_password
+      bssid: !secret wifi_bssid_2g

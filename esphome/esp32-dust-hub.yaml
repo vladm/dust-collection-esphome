@@ -106,7 +106,8 @@ api:
 
 ota:
   - platform: esphome
-    password: !secret ota_password
+    encryption: 
+    #password: !secret ota_password
 
 wifi:
   networks:
@@ -126,6 +127,18 @@ wifi:
     password: !secret wifi_fallback_password
 
 captive_portal:
+
+
+web_server:
+  port: 80
+  version: 3
+  local: true
+  ota: false
+  auth:
+    username: !secret web_username
+    password: !secret web_password
+    type: digest
+
 
 # ---------------------------------------------------------------------
 # ESP-NOW bus — broadcast mode, one encrypted packet reaches all
