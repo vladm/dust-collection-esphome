@@ -21,7 +21,7 @@ jobs:
     container:
       image: ghcr.io/esphome/esphome:2026.7.4
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # secrets.yaml is git-ignored; the sample ships format-valid dummy
       # values (password lengths, 32-byte base64 api_key, uppercase MACs)
