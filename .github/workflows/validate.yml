@@ -19,7 +19,7 @@ jobs:
     name: esphome config
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/esphome/esphome:2026.7.4
+      image: ghcr.io/esphome/esphome:2026.9.0
     steps:
       - uses: actions/checkout@v7
 
