@@ -21,7 +21,7 @@
 #   * Broadcasts per-line states + heartbeat to 4 blast-gate valve
 #     nodes over encrypted ESP-NOW with replay protection
 #   * Starts/stops the dust collector via relay:
-#       - 3 s start delay for gate travel (machine, manual switch
+#       - 2 s start delay for gate travel (machine, manual switch
 #         and external switch paths alike)
 #       - 15 s run-on after the last machine stops or the external
 #         switch is released; the gate in use is held open until the
@@ -54,7 +54,8 @@ substitutions:
   # --- Current sensing ---
   sample_duration: 250ms      # RMS window (>= a few AC cycles)
   samples: 15                # samples to average for RMS calculation
-  sense_interval: 1s          # how often each line is measured
+  sense_interval: 0.5s        # how often each line is measured
+                              # (must stay >= sample_duration)
   on_threshold: "1.5"         # RMS amps: machine ON above this
   off_threshold: "0.8"        # ...OFF below this (hysteresis)
   current_off_delay: 3s       # ride through brief dips
@@ -63,7 +64,8 @@ substitutions:
   report_interval: 10s        # HA-facing amp readings publish rate
 
   # --- Dust collector relay ---
-  collector_start_delay: 3s   # gate travel time before spin-up
+  collector_start_delay: 2s   # gate travel time before spin-up
+                              # (sweep ~0.9s + 400ms settle = ~1.3s)
   collector_runon: 15s        # run-on after last machine stops
   collector_min_off_ms: "30000"  # minimum time OFF before next ON
 
@@ -272,11 +274,11 @@ sensor:
 
   # -------------------------------------------------------------------
   # HA-facing amp readings, decoupled from detection. Throttled to one
-  # publish per ${report_interval} (latest 1 s reading, no averaging).
+  # publish per ${report_interval} (latest reading, no averaging).
   # Readings below ${report_noise_floor} are clamped to 0 so ADC noise
   # (0..0.2 A RMS even on unconnected inputs) doesn't show as phantom
   # current in HA. Detection (analog_threshold on the internal sensors)
-  # is unaffected — it keeps the full 1 s rate and raw values.
+  # is unaffected — it keeps the full ${sense_interval} rate and raw values.
   # -------------------------------------------------------------------
   - platform: copy
     source_id: line1_amps
