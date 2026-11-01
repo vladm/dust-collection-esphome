@@ -21,7 +21,7 @@
 #   * Broadcasts per-line states + heartbeat to 4 blast-gate valve
 #     nodes over encrypted ESP-NOW with replay protection
 #   * Starts/stops the dust collector via relay:
-#       - 2 s start delay for gate travel (machine, manual switch
+#       - 1.5 s start delay for gate travel (machine, manual switch
 #         and external switch paths alike)
 #       - 15 s run-on after the last machine stops or the external
 #         switch is released; the gate in use is held open until the
@@ -64,8 +64,8 @@ substitutions:
   report_interval: 10s        # HA-facing amp readings publish rate
 
   # --- Dust collector relay ---
-  collector_start_delay: 2s   # gate travel time before spin-up
-                              # (sweep ~0.9s + 400ms settle = ~1.3s)
+  collector_start_delay: 1.5s # gate travel time before spin-up
+                              # (measured travel < 1s on the rig)
   collector_runon: 15s        # run-on after last machine stops
   collector_min_off_ms: "30000"  # minimum time OFF before next ON
 
