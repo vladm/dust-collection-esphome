@@ -44,9 +44,9 @@ so the last machine's gate closes only after the relay drops — ducts purge
 through the open gate, collector never dead-heads. Another active demand
 releases the hold immediately (a stale open gate would bleed suction). Collector relay demand = any machine ON
 (`any_machine_on` reads `lineN_detect`), OR latching manual switch, OR latching
-external switch (GPIO11; machine-path timing — 1.5 s head start + 15 s run-on —
+external switch (GPIO11; machine-path timing — 1 s head start + 15 s run-on —
 and opens gate `external_gate_num`), OR "Remote Collection" HA template switch.
-The 1.5 s gate-travel head start applies on every path except Remote Collection:
+The 1 s gate-travel head start applies on every path except Remote Collection:
 machine via `delayed_on` on `any_machine_on`, manual via `delayed_on` on its
 GPIO sensor, external via internal `external_demand` template (raw switch
 drives the gate wrapper immediately; all demand checks read `external_demand`,
@@ -55,10 +55,13 @@ release the same 15 s run-on as a stopping machine, and the designated gate's
 wrapper ORs `external_demand` in directly, so that gate closes on the same
 edge that stops the relay — independent of the latch, which phantom detect
 blips from floating ADCs can release early on the bench).
-Sequencing: 1.5 s start delay (gate opens first), 15 s run-on after last machine
+Sequencing: 1 s start delay (gate opens first), 15 s run-on after last machine
 stops or external release, **30 s minimum-off
-lockout** (starts during lockout are queued and re-check demand when it
-expires; a reboot implies a fresh 30 s lockout). Relay is `internal:` — every
+lockout** (`collector_min_off`, seconds; starts during lockout are queued and,
+when it expires, re-check LIVE demand — raw `lineN_detect`, manual, raw
+external switch, remote — never the run-on-extended `any_machine_on` /
+`external_demand`, else a short run during lockout starts the collector after
+the machine already stopped; a reboot implies a fresh lockout). Relay is `internal:` — every
 path goes through `collector_start_req` / `collector_stop` scripts; state is
 exposed via the "Dust Collector Running" sensor. Relay + LED are
 `restore_mode: ALWAYS_OFF`. A 5 s reconciliation interval makes the relay
@@ -173,6 +176,6 @@ boot-close) every 5 min even though ESP-NOW itself would keep working.
 - [ ] Set `wifi_bssid` + uncomment bssid pins if the mesh mis-channels.
 - [ ] Pin the mesh 2.4 GHz channel; delete stale HA entities from renames.
 - [x] Confirm `collector_start_delay` ≥ real gate travel time
-      (measured < 1 s under load; delay set to 1.5 s).
+      (measured < 1 s under load; delay set to 1 s).
 - [ ] Don't wire the physical collector to the relay until sensors are in
       (floating pins create phantom demand and will run it).

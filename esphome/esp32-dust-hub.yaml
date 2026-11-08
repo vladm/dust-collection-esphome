@@ -21,7 +21,7 @@
 #   * Broadcasts per-line states + heartbeat to 4 blast-gate valve
 #     nodes over encrypted ESP-NOW with replay protection
 #   * Starts/stops the dust collector via relay:
-#       - 1.5 s start delay for gate travel (machine, manual switch
+#       - 1 s start delay for gate travel (machine, manual switch
 #         and external switch paths alike)
 #       - 15 s run-on after the last machine stops or the external
 #         switch is released; the gate in use is held open until the
@@ -64,10 +64,11 @@ substitutions:
   report_interval: 10s        # HA-facing amp readings publish rate
 
   # --- Dust collector relay ---
-  collector_start_delay: 1.5s # gate travel time before spin-up
+  collector_start_delay: 1s # gate travel time before spin-up
                               # (measured travel < 1s on the rig)
   collector_runon: 15s        # run-on after last machine stops
-  collector_min_off_ms: "30000"  # minimum time OFF before next ON
+  collector_min_off: "30"     # seconds (plain number): minimum time OFF
+                              # before next ON
 
   # --- Pins (ESP32-C6) ---
   adc_line1_pin: GPIO0
@@ -628,10 +629,10 @@ switch:
       - output.turn_on: collector_led
     on_turn_off:
       - output.turn_off: collector_led
-      - lambda: 'id(last_relay_off_ms) = millis();'   # arm 30 s lockout
+      - lambda: 'id(last_relay_off_ms) = millis();'   # arm min-off lockout
 
 # ---------------------------------------------------------------------
-# Collector start/stop with 30 s minimum-off lockout.
+# Collector start/stop with a minimum-off lockout (collector_min_off).
 # ---------------------------------------------------------------------
 script:
   - id: collector_start_req
@@ -643,23 +644,28 @@ script:
           then:
             - if:
                 condition:
-                  lambda: 'return (millis() - id(last_relay_off_ms)) < ${collector_min_off_ms};'
+                  lambda: 'return (millis() - id(last_relay_off_ms)) < ${collector_min_off} * 1000UL;'
                 then:
                   - logger.log:
                       level: WARN
-                      format: "Collector start deferred: 30 s minimum-off lockout active"
+                      format: "Collector start deferred: ${collector_min_off} s minimum-off lockout active"
             # Wait out whatever remains of the lockout (passes instantly
-            # if none), then start only if demand still exists.
+            # if none), then start only if demand is live RIGHT NOW. Reads
+            # the raw sources, not any_machine_on / external_demand: those
+            # hold ON through the run-on after a machine stops or the
+            # switch is released, so a short run during the lockout would
+            # otherwise start the collector once the machine is already off.
             - wait_until:
                 condition:
-                  lambda: 'return (millis() - id(last_relay_off_ms)) >= ${collector_min_off_ms};'
+                  lambda: 'return (millis() - id(last_relay_off_ms)) >= ${collector_min_off} * 1000UL;'
             - if:
                 condition:
-                  or:
-                    - binary_sensor.is_on: any_machine_on
-                    - binary_sensor.is_on: manual_collection
-                    - binary_sensor.is_on: external_demand
-                    - switch.is_on: remote_collection
+                  lambda: |-
+                    return id(line1_detect).state || id(line2_detect).state ||
+                           id(line3_detect).state || id(line4_detect).state ||
+                           id(manual_collection).state ||
+                           id(external_collection).state ||
+                           id(remote_collection).state;
                 then:
                   - logger.log: "Starting dust collector"
                   - switch.turn_on: collector_relay

@@ -21,7 +21,7 @@ adapter between gate controlling module and ball valve.
 - Opens only the blast gate for that machine; when the machine stops, the gate is
   held open through the collector run-on and closes only after the relay drops
   (unless another machine takes over, in which case it closes right away).
-- Sequences the collector: gate opens first (1.5 s), collector runs on for 15 s after
+- Sequences the collector: gate opens first (1 s), collector runs on for 15 s after
   the last machine stops, and a 30 s minimum-off lockout protects the motor.
 - Manual paths: a latching hardware switch at the collector, a second latching
   "external" switch that also opens one configured gate (`external_gate_num`,
@@ -68,7 +68,7 @@ gate doesn't bleed suction from the active one.
 
 Collector demand = **any machine running** OR **latching manual switch** OR
 **latching external switch** OR **"Remote Collection"**. Every path except Remote
-Collection gives the gate a 1.5 s travel head start before spin-up: the machine path
+Collection gives the gate a 1 s travel head start before spin-up: the machine path
 via `delayed_on` on `any_machine_on`, the manual switch via `delayed_on` on its GPIO
 sensor, and the external switch via the internal `external_demand` template — its
 raw state opens the gate immediately, while all demand checks read the delayed view,
@@ -82,7 +82,9 @@ on an uncalibrated bench).
 The relay itself is `internal:` — every path goes through
 the `collector_start_req` / `collector_stop` scripts, so the 30 s lockout can never
 be bypassed. A start requested during the lockout is *queued*: it waits out the
-remainder and then re-checks that demand still exists. Relay and LED use
+remainder and then re-checks that demand is live at that moment (a machine
+currently running, manual/external switch on, or Remote Collection on — not the
+run-on tail of a machine that already stopped). Relay and LED use
 `restore_mode: ALWAYS_OFF`, and a fresh boot implies a full 30 s lockout. A 5 s
 reconciliation interval makes the relay level-driven, so it converges on demand even
 if a boot-time edge was missed. Actual relay state is published as
@@ -305,9 +307,9 @@ Hub timings, in `esp32-dust-hub.yaml` `substitutions:`
 | `sense_interval` | `0.5s` | How often each line is measured |
 | `on_threshold` / `off_threshold` | `1.5` / `0.8` A | Machine ON/OFF hysteresis |
 | `current_off_delay` | `3s` | Rides through brief current dips |
-| `collector_start_delay` | `1.5s` | Gate head start before spin-up |
+| `collector_start_delay` | `1s` | Gate head start before spin-up |
 | `collector_runon` | `15s` | Run-on after the last machine stops (gate stays open until the relay drops) |
-| `collector_min_off_ms` | `30000` | Minimum-off lockout |
+| `collector_min_off` | `30` | Minimum-off lockout, in seconds (plain number) |
 | `reconcile_interval` | `5s` | Full-state broadcast |
 | `heartbeat_interval` | `2s` | Heartbeat publish |
 
