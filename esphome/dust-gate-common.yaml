@@ -16,6 +16,9 @@
 #     relay drops (or immediately if another demand source keeps the
 #     collector running — a stale open gate would bleed suction)
 #   * Reconciliation every 5 s: hub state is authoritative
+#   * HA override: opening the "Ball Valve" cover from HA holds the
+#     gate open (hub closes are ignored) until it is closed from HA;
+#     the fail-safe and a reboot also clear the override
 #   * Hub silent for 15 s -> fail-safe close (collector relay is on the
 #     hub, so in that scenario the collector is off too)
 #   * Encrypted ESP-NOW with rolling-code replay protection
@@ -159,6 +162,13 @@ globals:
     type: bool
     restore_value: no
     initial_value: 'false'
+  # HA hold-open override: set by the cover's open action, cleared by
+  # its close action, the fail-safe, or a reboot. While set, hub-driven
+  # closes (line OFF edge + 5 s reconciliation) are skipped.
+  - id: ha_override
+    type: bool
+    restore_value: no
+    initial_value: 'false'
   # Servo state machine
   - id: servo_pos
     type: float
@@ -224,8 +234,14 @@ binary_sensor:
       - logger.log: "Machine on -> opening blast gate"
       - script.execute: open_valve
     on_release:
-      - logger.log: "Machine off -> closing blast gate"
-      - script.execute: close_valve
+      - if:
+          condition:
+            lambda: 'return id(ha_override);'
+          then:
+            - logger.log: "Machine off, HA override active -> gate stays open"
+          else:
+            - logger.log: "Machine off -> closing blast gate"
+            - script.execute: close_valve
 
   # Diagnostic: heartbeat watchdog state. ON = heartbeat flowing and
   # fail-safe armed; OFF while "Machine Running (remote)" has a state
@@ -284,6 +300,7 @@ script:
       - logger.log:
           level: WARN
           format: "FAIL-SAFE: hub heartbeat lost >15s - closing blast gate"
+      - globals.set: { id: ha_override, value: 'false' }
       - script.execute: close_valve
 
   # Full sweep toward +90deg (open)
@@ -385,8 +402,8 @@ interval:
             - script.execute: failsafe_close
 
   # Reconciliation: hub state is authoritative while the link is up.
-  # Corrects drift from missed packets, manual HA moves, or reboots.
-  # Remove this block if manual HA override should persist.
+  # Corrects drift from missed packets or reboots. The close branch is
+  # skipped while the HA hold-open override is set.
   - interval: 5s
     then:
       - if:
@@ -405,6 +422,7 @@ interval:
             and:
               - lambda: 'return id(hub_alive);'
               - binary_sensor.is_off: line_current
+              - lambda: 'return !id(ha_override);'
               - lambda: |-
                   return id(ball_valve_cover).position != COVER_CLOSED &&
                          id(ball_valve_cover).current_operation == COVER_OPERATION_IDLE;
@@ -465,9 +483,13 @@ cover:
       if (id(servo_pos) >= 0.99f && !id(is_moving)) return COVER_OPEN;
       if (id(servo_pos) <= -0.99f && !id(is_moving)) return COVER_CLOSED;
       return {};  // in transit: keep last reported state
+    # Open from HA = hold-open override; close from HA = release it.
+    # (Hub-driven moves call the scripts directly, never these actions.)
     open_action:
+      - globals.set: { id: ha_override, value: 'true' }
       - script.execute: open_valve
     close_action:
+      - globals.set: { id: ha_override, value: 'false' }
       - script.execute: close_valve
     stop_action:
       - script.stop: open_valve

@@ -71,7 +71,12 @@ level-driven (converges to demand even if a boot-time edge is missed).
 calibrated servo sweep scripts. 5 s reconciliation treats hub state as
 authoritative. **15 s fail-safe close** on heartbeat loss (one-shot, re-arms
 on link return); since the collector relay is on the hub, a dead hub also
-means the collector is off. Boot closes the valve; `open_valve`/`close_valve`
+means the collector is off. **HA hold-open override** (`ha_override` global):
+the cover's `open_action` sets it, `close_action` clears it; while set, the
+line `on_release` close and the reconciliation close branch are skipped, so
+a gate opened from HA stays open until closed from HA. Fail-safe and reboot
+clear it. Gate-only — the hub is unaware; collector needs Remote Collection.
+Boot closes the valve; `open_valve`/`close_valve`
 must `script.stop: boot_close` (boot race fix — boot_close's 2 s delay would
 otherwise resume after an early ESP-NOW open and clobber position to closed).
 Servo detaches at closed (seat holds), stays attached at open (holding torque;

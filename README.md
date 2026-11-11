@@ -98,6 +98,12 @@ authoritative. If no hub packet arrives for **15 s**, the gate closes (one-shot,
 re-arms when the link returns) — and since the relay lives on the hub, a dead hub
 also means the collector is off.
 
+**HA override:** opening a gate's "Ball Valve" cover from Home Assistant holds it
+open — hub-driven closes (machine-off edge and the 5 s reconciliation) are skipped
+until the cover is closed from HA, which hands the gate back to the hub. The
+fail-safe close and a reboot also clear the override. The override only moves the
+gate; use "Remote Collection" on the hub to run the collector.
+
 Boot drives the valve straight to closed; `open_valve` / `close_valve` therefore
 `script.stop: boot_close` first, otherwise `boot_close`'s 2 s delay could resume
 *after* an early ESP-NOW open and clobber the position. The servo detaches at the
