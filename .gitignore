@@ -1,1 +1,19 @@
-secrets.yaml
+# ESPHome specific
+/.esphome/
+/secrets.yaml
+
+# PlatformIO & build artifacts (if applicable)
+**/.pioenvs/
+**/.piolibdeps/
+**/lib/
+**/src/
+**/platformio.ini
+
+# Python / Virtual Environment
+.venv/
+venv/
+ENV/
+
+# IDE / OS
+.vscode/
+.DS_Store
