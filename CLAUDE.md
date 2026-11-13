@@ -44,9 +44,11 @@ so the last machine's gate closes only after the relay drops — ducts purge
 through the open gate, collector never dead-heads. Another active demand
 releases the hold immediately (a stale open gate would bleed suction). Collector relay demand = any machine ON
 (`any_machine_on` reads `lineN_detect`), OR latching manual switch, OR latching
-external switch (GPIO11; machine-path timing — 1 s head start + 15 s run-on —
+external switch (GPIO11; machine-path timing — 50 ms start delay + 15 s run-on —
 and opens gate `external_gate_num`), OR "Remote Collection" HA template switch.
-The 1 s gate-travel head start applies on every path except Remote Collection:
+The 50 ms start delay (`collector_start_delay`; no real gate head start —
+collector motor spin-up outlasts gate travel) applies on every path except
+Remote Collection:
 machine via `delayed_on` on `any_machine_on`, manual via `delayed_on` on its
 GPIO sensor, external via internal `external_demand` template (raw switch
 drives the gate wrapper immediately; all demand checks read `external_demand`,
@@ -55,7 +57,7 @@ release the same 15 s run-on as a stopping machine, and the designated gate's
 wrapper ORs `external_demand` in directly, so that gate closes on the same
 edge that stops the relay — independent of the latch, which phantom detect
 blips from floating ADCs can release early on the bench).
-Sequencing: 1 s start delay (gate opens first), 15 s run-on after last machine
+Sequencing: 50 ms start delay (gate opens while the motor spins up), 15 s run-on after last machine
 stops or external release, **30 s minimum-off
 lockout** (`collector_min_off`, seconds; starts during lockout are queued and,
 when it expires, re-check LIVE demand — raw `lineN_detect`, manual, raw
@@ -153,7 +155,7 @@ boot-close) every 5 min even though ESP-NOW itself would keep working.
   ("Got sensor heartbeat ...").
 - **`[S]` log-viewer lines are not firmware logs** — the dashboard/HA viewer
   renders API *state updates* interleaved with logs; no `logger:` setting can
-  remove them. Fixed by making the 2 Hz ct_clamp sensors `internal:` (full
+  remove them. Fixed by making the 10 Hz ct_clamp sensors `internal:` (full
   rate for detection) and exposing `copy` sensors with `throttle_average: 30s`
   for HA reporting.
 - Debug component + Reset Reason / Device Info text sensors on all nodes
@@ -180,7 +182,7 @@ boot-close) every 5 min even though ESP-NOW itself would keep working.
 - [ ] Calibrate gate4 servo trim (currently a copy of gate1's values).
 - [ ] Set `wifi_bssid` + uncomment bssid pins if the mesh mis-channels.
 - [ ] Pin the mesh 2.4 GHz channel; delete stale HA entities from renames.
-- [x] Confirm `collector_start_delay` ≥ real gate travel time
-      (measured < 1 s under load; delay set to 1 s).
+- [x] Gate travel measured < 1 s under load; `collector_start_delay` set to
+      50 ms (debounce only) since collector spin-up outlasts gate travel.
 - [ ] Don't wire the physical collector to the relay until sensors are in
       (floating pins create phantom demand and will run it).

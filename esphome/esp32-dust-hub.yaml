@@ -21,8 +21,8 @@
 #   * Broadcasts per-line states + heartbeat to 4 blast-gate valve
 #     nodes over encrypted ESP-NOW with replay protection
 #   * Starts/stops the dust collector via relay:
-#       - 1 s start delay for gate travel (machine, manual switch
-#         and external switch paths alike)
+#       - 50 ms start delay (machine, manual switch and external
+#         switch paths alike); motor spin-up covers gate travel
 #       - 15 s run-on after the last machine stops or the external
 #         switch is released; the gate in use is held open until the
 #         relay actually drops (purge through the open gate, no
@@ -52,9 +52,9 @@ substitutions:
   heartbeat_interval: 2s      # heartbeat publish
 
   # --- Current sensing ---
-  sample_duration: 250ms      # RMS window (>= a few AC cycles)
+  sample_duration: 100ms      # RMS window (>= a few AC cycles)
   samples: 15                # samples to average for RMS calculation
-  sense_interval: 0.5s        # how often each line is measured
+  sense_interval: 100ms       # how often each line is measured
                               # (must stay >= sample_duration)
   on_threshold: "1.5"         # RMS amps: machine ON above this
   off_threshold: "0.8"        # ...OFF below this (hysteresis)
@@ -64,9 +64,9 @@ substitutions:
   report_interval: 10s        # HA-facing amp readings publish rate
 
   # --- Dust collector relay ---
-  collector_start_delay: 1s # gate travel time before spin-up
-                              # (measured travel < 1s on the rig)
-  collector_runon: 15s        # run-on after last machine stops
+  collector_start_delay: 50ms # debounce only: collector motor spin-up
+                              # outlasts gate travel (< 1s on the rig)
+  collector_runon: 20s        # run-on after last machine stops
   collector_min_off: "30"     # seconds (plain number): minimum time OFF
                               # before next ON
 
