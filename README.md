@@ -196,23 +196,9 @@ the board, and keep grounds common.
 
 ### ACS712 input chain (per line)
 
-```
-   5 V ────────── VCC ┌────────────┐
-                      │   ACS712   │   machine supply wire runs
-                      │            │   through IP+ / IP-
-   GND ──┬─────── GND └─────┬──────┘
-         │                 OUT
-         │                  │
-         │               [ R1 ]  10 kΩ
-         │                  │
-         │        node A    ●──────────────── ESP32 ADC pin
-         │                  │
-         │            ┌─────┴──────┐
-         │         [ R2 ]         ─┴─  C1
-         │         10 kΩ          ─┬─  100 nF
-         │            │            │
-         └────────────┴────────────┴───────── GND (common with the ESP32!)
-```
+See the hub schematic above: OUT → R1 (10 kΩ) → node A → R2 (10 kΩ) → GND; node A
+feeds the ESP32 ADC pin, with C1 (100 nF) from node A to GND. Sensor and ESP32
+grounds must be common.
 
 R1 = R2 halves the sensor output — the divider **ratio** is what matters, not the
 absolute value, so **5 kΩ pairs work just as well as 10 kΩ**. Just use the same
