@@ -174,6 +174,12 @@ ADC2 conflicts with Wi-Fi.
 GPIO4/GPIO5 are ADC-capable but double as strapping/JTAG pins; GPIO8/GPIO9 are boot
 strapping pins — all left free.
 
+![Hub electrical schematic](media/hub-schematic.svg)
+
+The relay switches the collector's hot wire (COM/NO); neutral and earth go
+straight to the motor. Each ACS712 sits in series with its machine's supply
+wire (IP+/IP−, not drawn).
+
 ### Gate pinout
 
 | Pin | XIAO C5 (package default) | C6 (gate 2 override) |
@@ -181,6 +187,12 @@ strapping pins — all left free.
 | Servo PWM (LEDC, 50 Hz) | GPIO10 | GPIO3 |
 | "Opened" LED | GPIO9 | GPIO10 |
 | "Closed" LED | GPIO8 | GPIO1 |
+
+![Gate electrical schematic](media/gate-schematic.svg)
+
+Drawn for the ESP32-C5 gates (1, 3, 4); gate 2 (C6) is the same circuit on the
+override pins above. Power the servo from the 5 V supply directly, not through
+the board, and keep grounds common.
 
 ### ACS712 input chain (per line)
 

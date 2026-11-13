@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 580 360" width="580" height="360" role="img" font-family="Helvetica, Arial, sans-serif">
+<title>Blast gate electrical schematic (ESP32-C5)</title>
+<desc>ESP32-C5 gate node: MG996R servo PWM on GPIO10 with servo power from the 5 V supply and common ground, opened LED on GPIO9 and closed LED on GPIO8, each through 330 ohm to ground.</desc>
+<style>
+.th{font-size:14px;font-weight:600;fill:#222}
+.ts{font-size:12px;fill:#444}
+.w{fill:none;stroke:#444;stroke-width:1.2}
+.esp{fill:#EEEDFE;stroke:#534AB7}
+.srv{fill:#E1F5EE;stroke:#0F6E56}
+.box{fill:#F1EFE8;stroke:#5F5E5A}
+</style>
+<rect width="580" height="360" fill="#fff"/>
+
+<rect class="esp" x="220" y="60" width="120" height="250" rx="6"/>
+<text class="th" x="280" y="84" text-anchor="middle">ESP32-C5</text>
+<text class="ts" x="228" y="124">5V</text>
+<text class="ts" x="332" y="114" text-anchor="end">GPIO10</text>
+<text class="ts" x="332" y="204" text-anchor="end">GPIO9</text>
+<text class="ts" x="332" y="264" text-anchor="end">GPIO8</text>
+<text class="ts" x="280" y="300" text-anchor="middle">GND</text>
+<path class="w" d="M280 310V326M272 326H288M275 330H285M278 334H282"/>
+
+<rect class="box" x="40" y="92" width="120" height="56" rx="4"/>
+<text class="th" x="100" y="116" text-anchor="middle">5 V supply</text>
+<text class="ts" x="100" y="134" text-anchor="middle">3 A, servo + ESP32</text>
+<path class="w" d="M160 120H220"/>
+
+<rect class="srv" x="420" y="70" width="130" height="90" rx="4"/>
+<text class="th" x="485" y="90" text-anchor="middle">MG996R servo</text>
+<text class="ts" x="426" y="114">PWM</text>
+<text class="ts" x="426" y="132">V+</text>
+<text class="ts" x="426" y="150">GND</text>
+<text class="ts" x="544" y="114" text-anchor="end">orange</text>
+<text class="ts" x="544" y="132" text-anchor="end">red</text>
+<text class="ts" x="544" y="150" text-anchor="end">brown</text>
+<path class="w" d="M340 110H420M402 128H420M402 122V134M420 146H406V154M398 154H414M401 158H411M404 162H408"/>
+<text class="ts" x="398" y="132" text-anchor="end">5V</text>
+
+<path class="w" d="M340 200H380M420 200H450M466 192V208M466 200H520V226M512 226H528M515 230H525M518 234H522M450 192V208L466 200Z"/>
+<rect class="w" x="380" y="194" width="40" height="12"/>
+<text class="ts" x="400" y="186" text-anchor="middle">330Ω</text>
+<text class="ts" x="480" y="186" text-anchor="middle">Opened LED</text>
+
+<path class="w" d="M340 260H380M420 260H450M466 252V268M466 260H520V286M512 286H528M515 290H525M518 294H522M450 252V268L466 260Z"/>
+<rect class="w" x="380" y="254" width="40" height="12"/>
+<text class="ts" x="400" y="246" text-anchor="middle">330Ω</text>
+<text class="ts" x="480" y="246" text-anchor="middle">Closed LED</text>
+</svg>

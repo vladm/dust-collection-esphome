@@ -54,8 +54,10 @@ substitutions:
   # --- Current sensing ---
   sample_duration: 100ms      # RMS window (>= a few AC cycles)
   samples: 15                # samples to average for RMS calculation
-  sense_interval: 100ms       # how often each line is measured
-                              # (must stay >= sample_duration)
+  sense_interval: 150ms       # how often each line is measured
+                              # (must stay > sample_duration: an update
+                              # that lands on the window's end cancels
+                              # the pending ct_clamp publish)
   on_threshold: "1.5"         # RMS amps: machine ON above this
   off_threshold: "0.8"        # ...OFF below this (hysteresis)
   current_off_delay: 3s       # ride through brief dips
